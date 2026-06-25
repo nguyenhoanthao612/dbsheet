@@ -1,0 +1,6 @@
+{
+  "name": "Hành Trình Ôn Tập IC3 GS6",
+  "description": "Nền tảng ôn tập và luyện thi IC3 GS6 vui nhộn dành cho học sinh với 3 cấp độ, giao diện gamification sinh động, 10 dạng câu hỏi và trang quản trị toàn diện.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
