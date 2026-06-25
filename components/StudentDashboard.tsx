@@ -55,6 +55,8 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
   const lv1Percent = getLevelCompletionPercent(1);
   const lv2Percent = getLevelCompletionPercent(2);
   const lv3Percent = getLevelCompletionPercent(3);
+  const isL2Locked = student.currentLevel < 2;
+  const isL3Locked = student.currentLevel < 3;
 
   // Tính điểm trung bình các miền nội dung của học sinh
   // Các miền: Computing Fundamentals, Key Applications, Living Online
@@ -383,27 +385,29 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
               </div>
 
               {/* LEVEL 2 CARD */}
-              {student.currentLevel >= 2 && (
-                <div className="bg-white rounded-[32px] border-4 border-[#2D3436] shadow-[8px_8px_0px_0px_rgba(45,52,54,0.15)] overflow-hidden animate-fadeIn" id="level2_island">
-                  <div className="bg-[#0984E3] border-b-4 border-[#2D3436] p-6 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+              {true && (
+                <div className={`bg-white rounded-[32px] border-4 border-[#2D3436] shadow-[8px_8px_0px_0px_rgba(45,52,54,0.15)] overflow-hidden animate-fadeIn ${isL2Locked ? 'select-none' : ''}`} id="level2_island">
+                  <div className={`${isL2Locked ? 'bg-slate-500' : 'bg-[#0984E3]'} border-b-4 border-[#2D3436] p-6 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4`}>
                     <div className="flex items-center gap-4">
                       <span className="text-4xl bg-white/20 p-2.5 rounded-2xl border-2 border-white/40 select-none">🏔️</span>
                       <div>
                         <h2 className="text-xl font-black flex items-center gap-2">
                           LEVEL 2: ĐẢO TRUNG SĨ SỐ
-                          <span className="text-xs bg-[#FDCB6E] text-[#2D3436] px-2 py-0.5 rounded-full font-black border-2 border-[#2D3436]">Trung cấp</span>
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-black border-2 border-[#2D3436] ${isL2Locked ? 'bg-slate-300 text-slate-800' : 'bg-[#FDCB6E] text-[#2D3436]'}`}>
+                            {isL2Locked ? '🔒 ĐÃ KHÓA' : 'Trung cấp'}
+                          </span>
                         </h2>
-                        <p className="text-xs text-blue-100 font-medium">Bảo mật thiết bị di động, đồng bộ dữ liệu đám mây, làm việc nhóm trực tuyến qua Google Drive.</p>
+                        <p className={`text-xs font-medium ${isL2Locked ? 'text-slate-200' : 'text-blue-100'}`}>Bảo mật thiết bị di động, đồng bộ dữ liệu đám mây, làm việc nhóm trực tuyến qua Google Drive.</p>
                       </div>
                     </div>
 
                     <div className="w-full md:w-64">
                       <div className="flex justify-between text-xs font-black mb-1">
                         <span>Đảo Hoàn Thành</span>
-                        <span className="font-black">{lv2Percent}%</span>
+                        <span className="font-black">{isL2Locked ? '🔒 Đang Khóa' : `${lv2Percent}%`}</span>
                       </div>
                       <div className="w-full bg-[#2D3436]/25 rounded-full h-3 border border-[#2D3436]/20">
-                        <div className="bg-[#FDCB6E] h-full rounded-full transition-all duration-1000 border-r-2 border-[#2D3436]" style={{ width: `${lv2Percent}%` }}></div>
+                        <div className={`h-full rounded-full transition-all duration-1000 border-r-2 border-[#2D3436] ${isL2Locked ? 'bg-slate-400' : 'bg-[#FDCB6E]'}`} style={{ width: `${isL2Locked ? 0 : lv2Percent}%` }}></div>
                       </div>
                     </div>
                   </div>
@@ -416,36 +420,42 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
                         <div
                           key={test.id}
                           id={`test_card_${test.code}`}
-                          className={`border-2 border-[#2D3436] rounded-2xl p-5 hover:shadow-lg transition-all relative flex flex-col justify-between hover:-translate-y-1 ${isDone ? 'bg-[#EBF5FB] shadow-[4px_4px_0px_0px_rgba(45,52,54,0.1)]' : 'bg-white shadow-[4px_4px_0px_0px_rgba(45,52,54,0.1)]'}`}
+                          className={`border-2 border-[#2D3436] rounded-2xl p-5 hover:shadow-lg transition-all relative flex flex-col justify-between hover:-translate-y-1 ${isL2Locked ? 'bg-slate-100/70 border-slate-300 opacity-80 shadow-sm' : isDone ? 'bg-[#EBF5FB] shadow-[4px_4px_0px_0px_rgba(45,52,54,0.1)]' : 'bg-white shadow-[4px_4px_0px_0px_rgba(45,52,54,0.1)]'}`}
                         >
-                          {isDone && (
+                          {isDone && !isL2Locked && (
                             <div className="absolute top-4 right-4 bg-[#74B9FF44] text-[#0984E3] text-[10px] font-black px-2 py-1 rounded-full border border-[#0984E3] flex items-center gap-1">
                               <CheckCircle2 className="w-3.5 h-3.5 text-[#0984E3]" /> Đã làm: {bestScore}/100 đ
                             </div>
                           )}
 
                           <div className="space-y-2">
-                            <span className="text-[10px] font-black text-[#0984E3] uppercase bg-[#EBF5FB] px-2.5 py-1 rounded-md border-2 border-[#0984E3] inline-block">
-                              {test.code}
+                            <span className={`text-[10px] font-black uppercase px-2.5 py-1 rounded-md border-2 inline-block ${isL2Locked ? 'text-slate-400 bg-slate-200 border-slate-300' : 'text-[#0984E3] bg-[#EBF5FB] border-[#0984E3]'}`}>
+                              {test.code} {isL2Locked && '🔒'}
                             </span>
-                            <h3 className="font-black text-[#2D3436] text-sm md:text-base leading-snug pt-1">
+                            <h3 className={`font-black text-sm md:text-base leading-snug pt-1 ${isL2Locked ? 'text-slate-400 line-through' : 'text-[#2D3436]'}`}>
                               {test.title}
                             </h3>
-                            <p className="text-gray-500 text-xs line-clamp-2">
+                            <p className="text-gray-400 text-xs line-clamp-2">
                               {test.description}
                             </p>
                           </div>
 
-                          <div className="border-t-2 border-slate-100 mt-4 pt-4 flex justify-between items-center text-xs text-gray-500">
+                          <div className="border-t-2 border-slate-100 mt-4 pt-4 flex justify-between items-center text-xs text-gray-400">
                             <span className="flex items-center gap-1 font-bold">⏱️ {test.timeLimit} phút</span>
                             <span className="flex items-center gap-1 font-bold">📝 {test.questionsCount} câu hỏi</span>
 
                             <button
-                              onClick={() => setSelectedTest(test)}
+                              onClick={() => {
+                                if (isL2Locked) {
+                                  alert("🔒 ĐỀ THI ĐANG KHÓA\n\nBạn cần hoàn thành Đảo Level 1 đạt 100% (hoặc nhờ Thầy Cô đặt cấp độ tài khoản của bạn lên Level 2 tại Trang Quản trị) để mở khóa bộ đề này!");
+                                } else {
+                                  setSelectedTest(test);
+                                }
+                              }}
                               id={`btn_open_test_${test.code}`}
-                              className="px-3.5 py-1.5 bg-[#6C5CE7] hover:bg-[#5849C4] text-white font-black rounded-xl border-2 border-[#2D3436] shadow-[2px_2px_0px_0px_rgba(45,52,54,1)] hover:translate-y-0.5 hover:shadow-[1px_1px_0px_0px_rgba(45,52,54,1)] transition-all text-xs cursor-pointer"
+                              className={`px-3.5 py-1.5 font-black rounded-xl border-2 border-[#2D3436] transition-all text-xs cursor-pointer ${isL2Locked ? 'bg-slate-300 text-slate-500 shadow-[1px_1px_0px_0px_rgba(45,52,54,1)]' : 'bg-[#6C5CE7] hover:bg-[#5849C4] text-white shadow-[2px_2px_0px_0px_rgba(45,52,54,1)] hover:translate-y-0.5 hover:shadow-[1px_1px_0px_0px_rgba(45,52,54,1)]'}`}
                             >
-                              Mở Đề
+                              {isL2Locked ? '🔒 Khóa' : 'Mở Đề'}
                             </button>
                           </div>
                         </div>
@@ -456,27 +466,29 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
               )}
 
               {/* LEVEL 3 CARD */}
-              {student.currentLevel >= 3 && (
-                <div className="bg-white rounded-[32px] border-4 border-[#2D3436] shadow-[8px_8px_0px_0px_rgba(45,52,54,0.15)] overflow-hidden animate-fadeIn" id="level3_island">
-                  <div className="bg-[#6C5CE7] border-b-4 border-[#2D3436] p-6 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+              {true && (
+                <div className={`bg-white rounded-[32px] border-4 border-[#2D3436] shadow-[8px_8px_0px_0px_rgba(45,52,54,0.15)] overflow-hidden animate-fadeIn ${isL3Locked ? 'select-none' : ''}`} id="level3_island">
+                  <div className={`${isL3Locked ? 'bg-slate-500' : 'bg-[#6C5CE7]'} border-b-4 border-[#2D3436] p-6 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4`}>
                     <div className="flex items-center gap-4">
                       <span className="text-4xl bg-white/20 p-2.5 rounded-2xl border-2 border-white/40 select-none">👑</span>
                       <div>
                         <h2 className="text-xl font-black flex items-center gap-2">
                           LEVEL 3: ĐẢO VUA CÔNG NGHỆ
-                          <span className="text-xs bg-[#FDCB6E] text-[#2D3436] px-2 py-0.5 rounded-full font-black border-2 border-[#2D3436]">Nâng cao</span>
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-black border-2 border-[#2D3436] ${isL3Locked ? 'bg-slate-300 text-slate-800' : 'bg-[#FDCB6E] text-[#2D3436]'}`}>
+                            {isL3Locked ? '🔒 ĐÃ KHÓA' : 'Nâng cao'}
+                          </span>
                         </h2>
-                        <p className="text-xs text-purple-100 font-medium">Luyện tập tư duy thuật toán, an ninh mạng nâng cao, mã hóa dữ liệu doanh nghiệp.</p>
+                        <p className={`text-xs font-medium ${isL3Locked ? 'text-slate-200' : 'text-purple-100'}`}>Luyện tập tư duy thuật toán, an ninh mạng nâng cao, mã hóa dữ liệu doanh nghiệp.</p>
                       </div>
                     </div>
 
                     <div className="w-full md:w-64">
                       <div className="flex justify-between text-xs font-black mb-1">
                         <span>Đảo Hoàn Thành</span>
-                        <span className="font-black">{lv3Percent}%</span>
+                        <span className="font-black">{isL3Locked ? '🔒 Đang Khóa' : `${lv3Percent}%`}</span>
                       </div>
                       <div className="w-full bg-[#2D3436]/25 rounded-full h-3 border border-[#2D3436]/20">
-                        <div className="bg-[#FDCB6E] h-full rounded-full transition-all duration-1000 border-r-2 border-[#2D3436]" style={{ width: `${lv3Percent}%` }}></div>
+                        <div className={`h-full rounded-full transition-all duration-1000 border-r-2 border-[#2D3436] ${isL3Locked ? 'bg-slate-400' : 'bg-[#FDCB6E]'}`} style={{ width: `${isL3Locked ? 0 : lv3Percent}%` }}></div>
                       </div>
                     </div>
                   </div>
@@ -489,36 +501,42 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
                         <div
                           key={test.id}
                           id={`test_card_${test.code}`}
-                          className={`border-2 border-[#2D3436] rounded-2xl p-5 hover:shadow-lg transition-all relative flex flex-col justify-between hover:-translate-y-1 ${isDone ? 'bg-[#F4ECF7] shadow-[4px_4px_0px_0px_rgba(45,52,54,0.1)]' : 'bg-white shadow-[4px_4px_0px_0px_rgba(45,52,54,0.1)]'}`}
+                          className={`border-2 border-[#2D3436] rounded-2xl p-5 hover:shadow-lg transition-all relative flex flex-col justify-between hover:-translate-y-1 ${isL3Locked ? 'bg-slate-100/70 border-slate-300 opacity-80 shadow-sm' : isDone ? 'bg-[#F4ECF7] shadow-[4px_4px_0px_0px_rgba(45,52,54,0.15)]' : 'bg-white shadow-[4px_4px_0px_0px_rgba(45,52,54,0.15)]'}`}
                         >
-                          {isDone && (
+                          {isDone && !isL3Locked && (
                             <div className="absolute top-4 right-4 bg-[#a29bfe44] text-[#6C5CE7] text-[10px] font-black px-2 py-1 rounded-full border border-[#6C5CE7] flex items-center gap-1">
                               <CheckCircle2 className="w-3.5 h-3.5 text-[#6C5CE7]" /> Đã làm: {bestScore}/100 đ
                             </div>
                           )}
 
                           <div className="space-y-2">
-                            <span className="text-[10px] font-black text-[#6C5CE7] uppercase bg-[#F4ECF7] px-2.5 py-1 rounded-md border-2 border-[#6C5CE7] inline-block">
-                              {test.code}
+                            <span className={`text-[10px] font-black uppercase px-2.5 py-1 rounded-md border-2 inline-block ${isL3Locked ? 'text-slate-400 bg-slate-200 border-slate-300' : 'text-[#6C5CE7] bg-[#F4ECF7] border-[#6C5CE7]'}`}>
+                              {test.code} {isL3Locked && '🔒'}
                             </span>
-                            <h3 className="font-black text-[#2D3436] text-sm md:text-base leading-snug pt-1">
+                            <h3 className={`font-black text-sm md:text-base leading-snug pt-1 ${isL3Locked ? 'text-slate-400 line-through' : 'text-[#2D3436]'}`}>
                               {test.title}
                             </h3>
-                            <p className="text-gray-500 text-xs line-clamp-2">
+                            <p className="text-gray-400 text-xs line-clamp-2">
                               {test.description}
                             </p>
                           </div>
 
-                          <div className="border-t-2 border-slate-100 mt-4 pt-4 flex justify-between items-center text-xs text-gray-500">
+                          <div className="border-t-2 border-slate-100 mt-4 pt-4 flex justify-between items-center text-xs text-gray-400">
                             <span className="flex items-center gap-1 font-bold">⏱️ {test.timeLimit} phút</span>
                             <span className="flex items-center gap-1 font-bold">📝 {test.questionsCount} câu hỏi</span>
 
                             <button
-                              onClick={() => setSelectedTest(test)}
+                              onClick={() => {
+                                if (isL3Locked) {
+                                  alert("🔒 ĐỀ THI ĐANG KHÓA\n\nBạn cần hoàn thành Đảo Level 2 đạt 100% (hoặc nhờ Thầy Cô đặt cấp độ tài khoản của bạn lên Level 3 tại Trang Quản trị) để mở khóa bộ đề này!");
+                                } else {
+                                  setSelectedTest(test);
+                                }
+                              }}
                               id={`btn_open_test_${test.code}`}
-                              className="px-3.5 py-1.5 bg-[#6C5CE7] hover:bg-[#5849C4] text-white font-black rounded-xl border-2 border-[#2D3436] shadow-[2px_2px_0px_0px_rgba(45,52,54,1)] hover:translate-y-0.5 hover:shadow-[1px_1px_0px_0px_rgba(45,52,54,1)] transition-all text-xs cursor-pointer"
+                              className={`px-3.5 py-1.5 font-black rounded-xl border-2 border-[#2D3436] transition-all text-xs cursor-pointer ${isL3Locked ? 'bg-slate-300 text-slate-500 shadow-[1px_1px_0px_0px_rgba(45,52,54,1)]' : 'bg-[#6C5CE7] hover:bg-[#5849C4] text-white shadow-[2px_2px_0px_0px_rgba(45,52,54,1)] hover:translate-y-0.5 hover:shadow-[1px_1px_0px_0px_rgba(45,52,54,1)]'}`}
                             >
-                              Mở Đề
+                              {isL3Locked ? '🔒 Khóa' : 'Mở Đề'}
                             </button>
                           </div>
                         </div>
