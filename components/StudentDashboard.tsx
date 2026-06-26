@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Student, Test, getTests, getTestResults, BADGES, TestResult } from '../lib/db';
 import { motion, AnimatePresence } from 'motion/react';
-import Mascot from './Mascots';
 import { Award, BookOpen, Clock, Trophy, Target, Zap, ShieldAlert, Sparkles, Filter, ChevronRight, LogOut, CheckCircle2, RefreshCw } from 'lucide-react';
 
 interface StudentDashboardProps {
   student: Student;
   onLogout: () => void;
-  onSelectTest: (test: Test, mode: 'practice' | 'exam') => void;
+  onSelectTest: (test: Test, mode: 'practice' | 'exam' | 'race') => void;
 }
 
 export default function StudentDashboard({ student, onLogout, onSelectTest }: StudentDashboardProps) {
@@ -55,8 +54,8 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
   const lv1Percent = getLevelCompletionPercent(1);
   const lv2Percent = getLevelCompletionPercent(2);
   const lv3Percent = getLevelCompletionPercent(3);
-  const isL2Locked = student.currentLevel < 2;
-  const isL3Locked = student.currentLevel < 3;
+  const isL2Locked = false;
+  const isL3Locked = false;
 
   // Tính điểm trung bình các miền nội dung của học sinh
   // Các miền: Computing Fundamentals, Key Applications, Living Online
@@ -93,28 +92,7 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
 
   const strengths = getCategoryStrengths();
 
-  // Nhận định điểm mạnh yếu
-  const getMascotFeedback = () => {
-    if (studentResults.length === 0) {
-      return "Chào chiến binh mới! Đảo Level 1 đang chờ đón bạn khai phá đấy. Hãy nhấp chọn đề thi 'OT1_LV1' để tham gia hành trình phiêu lưu cùng Robot IC3 nhé!";
-    }
-    const { cf, ka, lo } = strengths;
-    const categories = [
-      { name: 'Nền tảng máy tính (Computing Fundamentals)', val: cf, mascot: 'Robot IC3 🤖' },
-      { name: 'Ứng dụng văn phòng (Key Applications)', val: ka, mascot: 'Cáo Công Nghệ 🦊' },
-      { name: 'Kỹ năng mạng trực tuyến (Living Online)', val: lo, mascot: 'Panda IT 🐼' }
-    ];
 
-    categories.sort((a, b) => b.val - a.val);
-    const strongest = categories[0];
-    const weakest = categories[2];
-
-    if (strongest.val < 50) {
-      return "Chúng ta cần cố gắng thêm một chút nữa nhé! Điểm số trung bình đang hơi khiêm tốn. Mascot khuyên bạn nên làm đi làm lại ở Chế độ Luyện Tập để xem giải thích chi tiết của từng câu.";
-    }
-
-    return `Phân tích dữ liệu học tập: Bạn đang có phong độ cực tốt ở phần "${strongest.name}" nhờ sự trợ giúp từ ${strongest.mascot}. Phần cần tiếp tục rèn luyện là "${weakest.name}" (trung bình đạt ${weakest.val}%). Cùng cố gắng hơn nữa để đạt điểm tối đa nha!`;
-  };
 
   // Tạo dữ liệu cho bảng xếp hạng từ localStorage học sinh
   const getLeaderboardData = () => {
@@ -182,7 +160,7 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
             <div className="hidden md:flex flex-col text-right">
               <span className="font-black text-sm text-[#2D3436]">{student.name}</span>
               <span className="text-[10px] font-black text-[#00B894] px-2 py-0.5 bg-[#55EFC444] rounded self-end">
-                LỚP {student.class} • LEVEL {student.currentLevel}
+                LỚP {student.class} • LEVEL 1-2-3
               </span>
             </div>
 
@@ -251,16 +229,7 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
         </div>
       </section>
 
-      {/* CHỮ CHẠY GỢI Ý COCHING TỪ MASCOT */}
-      <div className="max-w-7xl mx-auto w-full px-6 mt-2">
-        <div className="bg-white rounded-3xl p-5 border-4 border-dashed border-[#6C5CE7] shadow-sm">
-          <Mascot
-            type={student.avatar === 'robot' ? 'robot' : student.avatar === 'fox' ? 'fox' : 'panda'}
-            mood="thinking"
-            speechBubble={getMascotFeedback()}
-          />
-        </div>
-      </div>
+
 
       {/* MENU CHUYỂN TABS CHÍNH */}
       <div className="border-b-4 border-slate-200 bg-white sticky top-0 z-10 shadow-sm">
@@ -549,7 +518,7 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
               {/* POPUP CHỌN CHẾ ĐỘ THI */}
               {selectedTest && (
                 <div className="fixed inset-0 bg-[#2D3436]/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn" id="mode_selector_modal">
-                  <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-lg w-full border-4 border-[#2D3436] shadow-[8px_8px_0px_0px_rgba(45,52,54,1)] relative">
+                  <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-4xl w-full border-4 border-[#2D3436] shadow-[8px_8px_0px_0px_rgba(45,52,54,1)] relative">
                     <button
                       onClick={() => setSelectedTest(null)}
                       className="absolute top-4 right-4 w-8 h-8 rounded-full border-2 border-[#2D3436] bg-slate-50 hover:bg-slate-100 text-[#2D3436] flex items-center justify-center text-lg font-black cursor-pointer shadow-[2px_2px_0px_0px_rgba(45,52,54,1)]"
@@ -571,7 +540,7 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
                         </p>
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-8">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-8">
                         {/* CHẾ ĐỘ LUYỆN TẬP */}
                         <button
                           onClick={() => onSelectTest(selectedTest, 'practice')}
@@ -586,7 +555,7 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
                             <p className="text-[10px] text-slate-600 leading-tight mt-1 font-bold">
                               • Xem đáp án & giải thích ngay lập tức.<br />
                               • Không tính áp lực thời gian.<br />
-                              • Nhận mẹo hay từ Mascot.
+                              • Nhận mẹo hay ghi nhớ bài học.
                             </p>
                           </div>
                         </button>
@@ -604,16 +573,35 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
                             <h4 className="font-black text-[#2D3436] text-sm">CHẾ ĐỘ KIỂM TRA</h4>
                             <p className="text-[10px] text-slate-600 leading-tight mt-1 font-bold">
                               • Đồng hồ tính giờ bám sát thi thật.<br />
-                            • Chấm điểm & phân tích kỹ năng cuối bài.<br />
-                            • Cơ hội nhận huy hiệu quý hiếm!
-                          </p>
-                        </div>
-                      </button>
+                              • Chấm điểm & phân tích kỹ năng cuối bài.<br />
+                              • Cơ hội nhận huy hiệu quý hiếm!
+                            </p>
+                          </div>
+                        </button>
+
+                        {/* CHẾ ĐỘ ĐƯỜNG ĐUA */}
+                        <button
+                          onClick={() => onSelectTest(selectedTest, 'race')}
+                          id="select_mode_race"
+                          className="border-4 border-[#2D3436] bg-[#FFF9E6] p-5 rounded-2xl text-left transition-all hover:scale-[1.02] flex flex-col justify-between h-44 group shadow-[4px_4px_0px_0px_rgba(45,52,54,1)] cursor-pointer"
+                        >
+                          <div className="p-2 bg-amber-100 text-[#D97706] border-2 border-[#2D3436] font-black text-[10px] rounded-lg w-max group-hover:rotate-12">
+                            🏎️ RACE
+                          </div>
+                          <div>
+                            <h4 className="font-black text-[#2D3436] text-sm">CHẾ ĐỘ ĐƯỜNG ĐUA</h4>
+                            <p className="text-[10px] text-slate-600 leading-tight mt-1 font-bold">
+                              • Làm sai lập tức quay về câu đầu tiên.<br />
+                              • Thách thức sự chuẩn xác tuyệt đối.<br />
+                              • Rèn luyện phản xạ và nhớ lâu cực đỉnh!
+                            </p>
+                          </div>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
             </motion.div>
           )}
 
@@ -745,8 +733,8 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
 
                     <div className="p-4 bg-[#E8F8F5] rounded-2xl border-2 border-[#2D3436] shadow-[3px_3px_0px_0px_rgba(45,52,54,1)] text-center space-y-1">
                       <p className="text-[10px] uppercase font-black text-[#00B894] tracking-wider">Đề đã vượt qua</p>
-                      <h4 className="text-3xl font-black text-[#2D3436]">{studentResults.filter(r => r.score >= 50).length} đề</h4>
-                      <p className="text-[9px] text-slate-500 font-bold">Bài ôn thi đạt chuẩn</p>
+                      <h4 className="text-3xl font-black text-[#2D3436]">{studentResults.filter(r => r.score === 100).length} đề</h4>
+                      <p className="text-[9px] text-slate-500 font-bold">Đúng hết tất cả câu</p>
                     </div>
 
                     <div className="p-4 bg-[#FFF4E5] rounded-2xl border-2 border-[#2D3436] shadow-[3px_3px_0px_0px_rgba(45,52,54,1)] text-center space-y-1">
@@ -843,7 +831,7 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
                       </thead>
                       <tbody className="divide-y divide-slate-100 text-slate-700">
                         {[...studentResults].reverse().map((res) => {
-                          const isPass = res.score >= 50;
+                          const isPass = res.score === 100;
                           return (
                             <tr key={res.id} className="hover:bg-[#FFF9E6]/30 transition-colors">
                               <td className="py-3.5 px-4">
@@ -868,7 +856,7 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
                               </td>
                               <td className="py-3.5 px-4 text-center">
                                 <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${isPass ? 'bg-[#E8F8F5] text-[#00B894] border-[#00B894]' : 'bg-[#FDEDEC] text-[#FF7675] border-[#FF7675]'}`}>
-                                  {isPass ? 'Đạt Chuẩn ✔' : 'Chưa Đạt ✘'}
+                                  {isPass ? 'Đúng hết ✔' : 'Chưa đúng hết ✘'}
                                 </span>
                               </td>
                             </tr>
@@ -898,7 +886,7 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
                   <h3 className="font-black text-base">Bộ Lọc Bảng Danh Dự</h3>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full md:w-auto">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full md:w-auto">
                   {/* Lọc Lớp */}
                   <div>
                     <label className="block text-[10px] font-black text-[#2D3436] uppercase tracking-wider mb-1">Lớp</label>
@@ -911,21 +899,6 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
                       {allClasses.map(cls => (
                         <option key={cls} value={cls}>Lớp {cls}</option>
                       ))}
-                    </select>
-                  </div>
-
-                  {/* Lọc Level */}
-                  <div>
-                    <label className="block text-[10px] font-black text-[#2D3436] uppercase tracking-wider mb-1">Cấp Độ Luyện</label>
-                    <select
-                      value={lbLevelFilter}
-                      onChange={(e) => setLbLevelFilter(e.target.value)}
-                      className="w-full p-2 border-2 border-[#2D3436] rounded-xl text-xs bg-[#FFF9E6] text-[#2D3436] font-bold focus:ring-2 focus:ring-[#6C5CE7] outline-none shadow-[2px_2px_0px_0px_rgba(45,52,54,1)] cursor-pointer"
-                    >
-                      <option value="All">Tất Cả Level</option>
-                      <option value="1">Học sinh Level 1</option>
-                      <option value="2">Học sinh Level 2</option>
-                      <option value="3">Học sinh Level 3</option>
                     </select>
                   </div>
 
@@ -999,7 +972,7 @@ export default function StudentDashboard({ student, onLogout, onSelectTest }: St
 
                             <td className="py-4 px-6 text-center">
                               <span className="text-xs font-black px-2 py-0.5 bg-[#F4ECF7] border-2 border-[#6C5CE7] text-[#6C5CE7] rounded-full">
-                                Level {std.currentLevel}
+                                Level 1-2-3
                               </span>
                             </td>
 

@@ -10,7 +10,6 @@ import {
   saveQuestionsBatchToGoogleSheet,
   deleteRowInGoogleSheet
 } from '../lib/sheets';
-import Mascot from './Mascots';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Users, BookOpen, HelpCircle, BarChart3, Plus, Edit2, Trash2, Copy, Search, Lock, Unlock,
@@ -35,7 +34,8 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
   const [stCode, setStCode] = useState('');
   const [stPassword, setStPassword] = useState('123');
   const [stClass, setStClass] = useState('');
-  const [stLevel, setStLevel] = useState<1 | 2 | 3>(1);
+  const [stSchool, setStSchool] = useState('');
+  const [stLevel, setStLevel] = useState<1 | 2 | 3>(3);
   const [stAvatar, setStAvatar] = useState('robot');
 
   // Trạng thái cho Đề thi
@@ -106,6 +106,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
       setStCode(student.code);
       setStPassword(student.password || '123');
       setStClass(student.class);
+      setStSchool(student.school || '');
       setStLevel(student.currentLevel);
       setStAvatar(student.avatar);
     } else {
@@ -114,7 +115,8 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
       setStCode('');
       setStPassword('123');
       setStClass('');
-      setStLevel(1);
+      setStSchool('');
+      setStLevel(3);
       setStAvatar('robot');
     }
     setShowStudentModal(true);
@@ -122,8 +124,8 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
 
   const handleSaveStudent = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!stName || !stCode || !stClass) {
-      alert('Vui lòng điền đầy đủ các thông tin bắt buộc!');
+    if (!stName || !stCode || !stClass || !stSchool) {
+      alert('Vui lòng điền đầy đủ các thông tin bắt buộc (Họ tên, Mã HS, Trường học và Lớp học)!');
       return;
     }
 
@@ -139,6 +141,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
             code: stCode,
             password: stPassword,
             class: stClass,
+            school: stSchool,
             currentLevel: stLevel,
             avatar: stAvatar,
           };
@@ -173,6 +176,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
         code: stCode.trim().toUpperCase(),
         name: stName.trim(),
         class: stClass.trim().toUpperCase(),
+        school: stSchool.trim(),
         password: stPassword,
         currentLevel: stLevel,
         avatar: stAvatar,
@@ -192,7 +196,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
       updateStudentInGoogleSheet({
         student_id: newStudent.code,
         fullname: newStudent.name,
-        school: '',
+        school: newStudent.school || '',
         class: newStudent.class,
         password: newStudent.password,
         level: String(newStudent.currentLevel),
@@ -1275,8 +1279,8 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
     // Sắp xếp tìm Top 5 học sinh xuất sắc
     const topStudents = [...stds].sort((a, b) => b.averageScore - a.averageScore).slice(0, 5);
 
-    // Tỷ lệ đạt chuẩn (điểm >= 50)
-    const passAttempts = results.filter(r => r.score >= 50).length;
+    // Tỷ lệ đạt chuẩn (điểm === 100)
+    const passAttempts = results.filter(r => r.score === 100).length;
     const passRate = totalAttempts > 0 ? Math.round((passAttempts / totalAttempts) * 100) : 0;
 
     return {
@@ -1809,14 +1813,25 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                 />
               </div>
 
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Mật khẩu *</label>
+                <input
+                  type="text"
+                  value={stPassword}
+                  onChange={(e) => setStPassword(e.target.value)}
+                  placeholder="Mật khẩu"
+                  className="w-full p-2.5 border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500 bg-slate-50 font-bold"
+                />
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Mật khẩu *</label>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Trường Học *</label>
                   <input
                     type="text"
-                    value={stPassword}
-                    onChange={(e) => setStPassword(e.target.value)}
-                    placeholder="Mật khẩu"
+                    value={stSchool}
+                    onChange={(e) => setStSchool(e.target.value)}
+                    placeholder="Ví dụ: THCS Nguyễn Du"
                     className="w-full p-2.5 border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500 bg-slate-50 font-bold"
                   />
                 </div>
@@ -1832,21 +1847,10 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                 </div>
               </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Cấp Độ Luyện Tập</label>
-                <select
-                  value={stLevel}
-                  onChange={(e) => setStLevel(parseInt(e.target.value) as any)}
-                  className="w-full p-2.5 border border-slate-200 rounded-xl text-xs outline-none bg-slate-50 font-bold"
-                >
-                  <option value={1}>Level 1 - Cơ bản</option>
-                  <option value={2}>Level 2 - Trung cấp</option>
-                  <option value={3}>Level 3 - Nâng cao</option>
-                </select>
-              </div>
+
 
               <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Chọn Mascot Đại Diện</label>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Chọn Avatar Đại Diện</label>
                 <div className="grid grid-cols-3 gap-2">
                   {['robot', 'fox', 'panda'].map((avatar) => (
                     <button
@@ -2103,28 +2107,6 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                       <span>⚠️ {parsingError}</span>
                     </div>
                   )}
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Giải Thích Chi Tiết Đáp Án *</label>
-                  <textarea
-                    value={qExplanation}
-                    onChange={(e) => setQExplanation(e.target.value)}
-                    placeholder="Giải thích lý do vì sao đáp án đúng..."
-                    rows={2}
-                    className="w-full p-2.5 border border-slate-200 rounded-xl text-xs bg-slate-50 font-bold outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Mẹo Ghi Nhớ Từ Mascot *</label>
-                  <input
-                    type="text"
-                    value={qTip}
-                    onChange={(e) => setQTip(e.target.value)}
-                    placeholder="Mẹo ngắn để nhớ kiến thức..."
-                    className="w-full p-2.5 border border-slate-200 rounded-xl text-xs bg-slate-50 font-bold outline-none"
-                  />
                 </div>
 
                 {/* HƯỚNG DẪN ĐỊNH DẠNG THEO TỪNG DẠNG */}
@@ -3016,7 +2998,7 @@ Hãy nhấp vào biểu tượng Save trên thanh công cụ.`);
                 {isAiLoading && (
                   <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 space-y-2.5 animate-pulse">
                     <div className="flex items-center gap-1.5 text-xs text-indigo-800 font-extrabold">
-                      <Mascot type="robot" className="w-6 h-6" animate={true} /> Mẹo Mascot:
+                      💡 Mẹo Ghi Nhớ:
                     </div>
                     <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
                       AI đang tiến hành bóc tách nội dung, nhận diện dạng câu hỏi (Trắc nghiệm, Nối cột, Kéo thả, Hotspot...) và sinh lời giải thích chi tiết cùng mẹo ghi nhớ cho bạn đấy!
@@ -3298,7 +3280,7 @@ Hãy nhấp vào biểu tượng Save trên thanh công cụ.`);
                             </div>
 
                             <div>
-                              <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Mẹo học từ Mascot</label>
+                              <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Mẹo học nhanh</label>
                               <input
                                 type="text"
                                 value={draftParsedQuestion.tip}
@@ -3357,7 +3339,7 @@ Hãy nhấp vào biểu tượng Save trên thanh công cụ.`);
                                     💡 <strong>Giải thích:</strong> {parsedQuestions[selectedPreviewParsedIdx].explanation}
                                   </p>
                                   <p className="text-[11px] text-amber-600 italic font-bold">
-                                    🐹 <strong>Mẹo Mascot:</strong> {parsedQuestions[selectedPreviewParsedIdx].tip}
+                                    💡 <strong>Mẹo ghi nhớ:</strong> {parsedQuestions[selectedPreviewParsedIdx].tip}
                                   </p>
                                 </div>
                               </div>

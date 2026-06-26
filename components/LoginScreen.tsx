@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { getStudents, getAdmins, Student } from '../lib/db';
 import { saveLogToGoogleSheet, getGoogleSheetUrl, setGoogleSheetUrl, syncDatabaseFromGoogleSheets } from '../lib/sheets';
 import { motion, AnimatePresence } from 'motion/react';
-import Mascot from './Mascots';
 import { ShieldCheck, User, Key, Play, Sparkles, School, Users, CheckCircle, RefreshCw, Settings, HelpCircle, Check, AlertTriangle } from 'lucide-react';
 
 interface LoginScreenProps {
@@ -312,7 +311,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                       <option value="">-- Chọn tên học sinh --</option>
                       {studentsList.map((stud) => (
                         <option key={stud.id} value={stud.id}>
-                          {stud.name} ({stud.id})
+                          {stud.name}
                         </option>
                       ))}
                     </select>
@@ -516,17 +515,11 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           </AnimatePresence>
         </div>
 
-        {/* Mascot support bubble */}
-        <div className="mt-6">
-          <Mascot
-            type="robot"
-            mood="happy"
-            speechBubble={
-              role === 'student'
-                ? 'Tuyệt vời! Bạn chỉ cần chọn Trường, Lớp và tên của mình rồi nhập mật khẩu là có thể thám hiểm ngay. Không cần gõ tay mã học sinh nữa đâu nhé! 🌟'
-                : 'Chào thầy cô giáo! Hãy đăng nhập bằng tài khoản quản trị để xem thống kê học lực toàn trường và quản lý đề thi linh hoạt nhé!'
-            }
-          />
+        {/* Support instructions bubble */}
+        <div className="mt-6 bg-indigo-50/70 p-4.5 rounded-2xl border border-indigo-100 text-center text-indigo-950 font-semibold text-xs leading-relaxed max-w-lg mx-auto">
+          {role === 'student'
+            ? '💡 Bạn chỉ cần chọn Trường, Lớp và tên của mình rồi nhập mật khẩu là có thể thám hiểm ngay. Không cần gõ tay mã học sinh nữa đâu nhé! 🌟'
+            : '💡 Chào thầy cô giáo! Hãy đăng nhập bằng tài khoản quản trị để xem thống kê học lực toàn trường và quản lý đề thi linh hoạt nhé!'}
         </div>
       </div>
     </div>

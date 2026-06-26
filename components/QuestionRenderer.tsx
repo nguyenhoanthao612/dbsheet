@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Question, QuestionType, IC3Category } from '../lib/db';
-import Mascot from './Mascots';
 import { Check, X, ArrowUp, ArrowDown, HelpCircle, Eye, AlertCircle } from 'lucide-react';
 
 interface QuestionRendererProps {
@@ -9,7 +8,7 @@ interface QuestionRendererProps {
   userAnswer: any;
   onChangeAnswer: (answer: any) => void;
   isSubmitted: boolean; // Đã kiểm tra (ở chế độ Luyện tập) hoặc Đã nộp bài (ở chế độ Kiểm tra)
-  mode: 'practice' | 'exam';
+  mode: 'practice' | 'exam' | 'race';
   onCheckAnswer?: () => void; // Cho chế độ Luyện tập
 }
 
@@ -50,14 +49,7 @@ export default function QuestionRenderer({
     return [];
   });
 
-  // Xác định mascot loại gì cho câu hỏi
-  const getMascotType = (): 'robot' | 'fox' | 'panda' => {
-    if (question.category === IC3Category.COMPUTING_FUNDAMENTALS) return 'robot';
-    if (question.category === IC3Category.KEY_APPLICATIONS) return 'fox';
-    return 'panda';
-  };
 
-  const mascotType = getMascotType();
 
   // --- 1. MULTIPLE CHOICE ---
   const renderMultipleChoice = () => {
@@ -945,7 +937,7 @@ export default function QuestionRenderer({
       <div className="py-2">{renderQuestionBody()}</div>
 
       {/* Hành động kiểm tra đáp án (Practice Mode) */}
-      {mode === 'practice' && !isSubmitted && onCheckAnswer && (
+      {mode !== 'exam' && !isSubmitted && onCheckAnswer && (
         <div className="flex justify-end">
           <button
             id="btn_check_answer"
@@ -958,29 +950,6 @@ export default function QuestionRenderer({
         </div>
       )}
 
-      {/* Hiển thị Mascot hỗ trợ, Giải thích & Mẹo của Mascot (Practice mode đã nộp hoặc Exam mode kết thúc và xem lại) */}
-      {isSubmitted && (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mt-6 border-t pt-5 space-y-4"
-        >
-          <div className="bg-gradient-to-r from-emerald-50 to-teal-50 p-4 rounded-2xl border border-emerald-100 space-y-3">
-            <h4 className="font-bold text-emerald-900 text-sm flex items-center gap-1.5">
-              💡 Giải Thích Chi Tiết từ Ban Giám Khảo:
-            </h4>
-            <p className="text-slate-700 text-sm leading-relaxed whitespace-pre-line">
-              {question.explanation}
-            </p>
-          </div>
-
-          <Mascot
-            type={mascotType}
-            mood="happy"
-            speechBubble={`🌟 Mẹo ghi nhớ cực hay: ${question.tip}`}
-          />
-        </motion.div>
-      )}
     </div>
   );
 }

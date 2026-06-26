@@ -179,7 +179,7 @@ export async function syncDatabaseFromGoogleSheets(): Promise<{
           code: String(t.exam_id),
           level: mapSheetLevel(t.level),
           title: String(t.exam_name),
-          description: `Phân loại: ${t.category}. Điểm chuẩn đạt: ${t.passing_score || 70}đ.`,
+          description: `Yêu cầu đạt: đúng hết tất cả câu.`,
           category: mapSheetCategory(t.category),
           timeLimit: Number(t.time_limit || 15),
           questionsCount: 10, // will update dynamically if cached or loaded

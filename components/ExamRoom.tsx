@@ -3,14 +3,95 @@ import { Test, Question, getQuestions, getStudents, saveStudents, TestResult, ge
 import { fetchQuestionsFromGoogleSheet, saveResultToGoogleSheet, updateStudentInGoogleSheet } from '../lib/sheets';
 import { motion, AnimatePresence } from 'motion/react';
 import QuestionRenderer from './QuestionRenderer';
-import Mascot from './Mascots';
-import { Clock, ArrowLeft, ArrowRight, HelpCircle, Send, Award, CheckCircle2, XCircle, ChevronLeft, RefreshCw, Star, Sparkles } from 'lucide-react';
+import { Clock, ArrowLeft, ArrowRight, HelpCircle, Send, Award, CheckCircle2, XCircle, ChevronLeft, RefreshCw, Star, Sparkles, Flag } from 'lucide-react';
 
 interface ExamRoomProps {
   test: Test;
   studentId: string;
-  mode: 'practice' | 'exam';
+  mode: 'practice' | 'exam' | 'race';
   onBackToDashboard: () => void;
+}
+
+function shuffleArray<T>(array: T[]): T[] {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function shuffleQuestionsList(qList: Question[]): Question[] {
+  return qList.map(q => {
+    // Clone question to avoid mutating the original database objects
+    const cloned = JSON.parse(JSON.stringify(q)) as Question;
+
+    try {
+      if (cloned.type === 'multiple_choice' || cloned.type === 'image_based' || cloned.type === 'scenario') {
+        if (Array.isArray(cloned.options) && cloned.options.length > 0) {
+          const originalOptions: string[] = cloned.options;
+          const originalCorrectAnswer = cloned.correctAnswer;
+          
+          if (typeof originalCorrectAnswer === 'number' && originalCorrectAnswer >= 0 && originalCorrectAnswer < originalOptions.length) {
+            const indices: number[] = originalOptions.map((_: any, i: number) => i);
+            const shuffledIndices = shuffleArray<number>(indices);
+            cloned.options = shuffledIndices.map((i: number) => originalOptions[i]);
+            cloned.correctAnswer = shuffledIndices.indexOf(originalCorrectAnswer);
+          }
+        }
+      } else if (cloned.type === 'multiple_response') {
+        if (Array.isArray(cloned.options) && cloned.options.length > 0) {
+          const originalOptions: string[] = cloned.options;
+          const originalCorrectAnswer = cloned.correctAnswer;
+          
+          if (Array.isArray(originalCorrectAnswer)) {
+            const indices: number[] = originalOptions.map((_: any, i: number) => i);
+            const shuffledIndices = shuffleArray<number>(indices);
+            cloned.options = shuffledIndices.map((i: number) => originalOptions[i]);
+            cloned.correctAnswer = originalCorrectAnswer
+              .map((oldIdx: number) => shuffledIndices.indexOf(oldIdx))
+              .filter((idx: number) => idx !== -1);
+          }
+        }
+      } else if (cloned.type === 'matching') {
+        if (cloned.options && Array.isArray(cloned.options.itemsB) && Array.isArray(cloned.correctAnswer)) {
+          const itemsB: string[] = cloned.options.itemsB;
+          const indicesB: number[] = itemsB.map((_: any, i: number) => i);
+          const shuffledIndicesB = shuffleArray<number>(indicesB);
+          cloned.options.itemsB = shuffledIndicesB.map((i: number) => itemsB[i]);
+          cloned.correctAnswer = cloned.correctAnswer.map((oldBIdx: number) => {
+            return shuffledIndicesB.indexOf(oldBIdx);
+          });
+        }
+      } else if (cloned.type === 'sequence') {
+        if (Array.isArray(cloned.options) && Array.isArray(cloned.correctAnswer)) {
+          const originalSteps: string[] = cloned.options;
+          const correctSteps: string[] = cloned.correctAnswer.map((idx: number) => originalSteps[idx]);
+          
+          const shuffledSteps = shuffleArray<string>(originalSteps);
+          cloned.options = shuffledSteps;
+          cloned.correctAnswer = correctSteps.map((step: string) => shuffledSteps.indexOf(step));
+        }
+      } else if (cloned.type === 'drag_drop') {
+        if (cloned.options && Array.isArray(cloned.options.items)) {
+          cloned.options.items = shuffleArray<string>(cloned.options.items);
+        }
+      } else if (cloned.type === 'dropdown') {
+        if (cloned.options && Array.isArray(cloned.options.dropdownOptions)) {
+          cloned.options.dropdownOptions = cloned.options.dropdownOptions.map((opts: string[]) => {
+            if (Array.isArray(opts)) {
+              return shuffleArray<string>(opts);
+            }
+            return opts;
+          });
+        }
+      }
+    } catch (err) {
+      console.warn("Error shuffling question ID:", cloned.id, err);
+    }
+
+    return cloned;
+  });
 }
 
 export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: ExamRoomProps) {
@@ -24,16 +105,16 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
         const sheetName = (test as any).sheetName || test.code;
         const fetched = await fetchQuestionsFromGoogleSheet(sheetName, test.code);
         if (fetched && fetched.length > 0) {
-          setQuestions(fetched);
+          setQuestions(shuffleQuestionsList(fetched));
         } else {
           // Fallback to local questions if sheet fetching returns empty
           const fallback = getQuestions().filter(q => q.testId === test.code);
-          setQuestions(fallback);
+          setQuestions(shuffleQuestionsList(fallback));
         }
       } catch (err) {
         console.warn('Error loading questions from Google Sheets:', err);
         const fallback = getQuestions().filter(q => q.testId === test.code);
-        setQuestions(fallback);
+        setQuestions(shuffleQuestionsList(fallback));
       } finally {
         setIsLoading(false);
       }
@@ -43,10 +124,19 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
 
   const [currentIdx, setCurrentIdx] = useState(0);
   const [userAnswers, setUserAnswers] = useState<{ [qId: string]: any }>({});
+  const [flaggedQuestions, setFlaggedQuestions] = useState<{ [qId: string]: boolean }>({});
+
+  const toggleFlag = (qId: string) => {
+    setFlaggedQuestions(prev => ({
+      ...prev,
+      [qId]: !prev[qId]
+    }));
+  };
 
   
   // Trạng thái nộp bài và xem kết quả
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [isReviewMode, setIsReviewMode] = useState(false);
   const [timeSpent, setTimeSpent] = useState(0); // tính bằng giây
   const [timeLeft, setLeftTime] = useState(test.timeLimit * 60); // tính bằng giây
   const [unlockedBadges, setUnlockedBadges] = useState<Badge[]>([]);
@@ -271,13 +361,14 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
     const savedSession = localStorage.getItem(saveKey);
     if (savedSession) {
       try {
-        const { answers, savedCurrentIdx, savedTimeSpent, savedTimeLeft, savedIsSubmitted } = JSON.parse(savedSession);
+        const { answers, savedCurrentIdx, savedTimeSpent, savedTimeLeft, savedIsSubmitted, savedFlagged } = JSON.parse(savedSession);
         const timer = setTimeout(() => {
           setUserAnswers(answers || {});
           setCurrentIdx(savedCurrentIdx || 0);
           setTimeSpent(savedTimeSpent || 0);
           setLeftTime(savedTimeLeft !== undefined ? savedTimeLeft : test.timeLimit * 60);
           setIsSubmitted(savedIsSubmitted || false);
+          setFlaggedQuestions(savedFlagged || {});
         }, 0);
         return () => clearTimeout(timer);
       } catch (e) {
@@ -318,13 +409,19 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
       savedTimeSpent: timeSpent,
       savedTimeLeft: timeLeft,
       savedIsSubmitted: isSubmitted,
+      savedFlagged: flaggedQuestions,
     };
     localStorage.setItem(saveKey, JSON.stringify(sessionData));
-  }, [userAnswers, currentIdx, timeSpent, timeLeft, isSubmitted, questions, saveKey]);
+  }, [userAnswers, currentIdx, timeSpent, timeLeft, isSubmitted, questions, saveKey, flaggedQuestions]);
 
   // Xem kết quả ngay lập tức cho từng câu (Practice Mode)
   const [checkedAnswers, setCheckedAnswers] = useState<{ [qId: string]: boolean }>({});
-  
+  const [showPracticePopup, setShowPracticePopup] = useState(false);
+  const [isCorrectPopup, setIsCorrectPopup] = useState(false);
+  const [popupOffset, setPopupOffset] = useState({ x: 0, y: 0 });
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+
   const handleAnswerChange = (qId: string, answer: any) => {
     setUserAnswers(prev => ({
       ...prev,
@@ -332,12 +429,83 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
     }));
   };
 
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setDragging(true);
+    setDragStart({
+      x: e.clientX - popupOffset.x,
+      y: e.clientY - popupOffset.y
+    });
+  };
+
+  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length === 0) return;
+    const touch = e.touches[0];
+    setDragging(true);
+    setDragStart({
+      x: touch.clientX - popupOffset.x,
+      y: touch.clientY - popupOffset.y
+    });
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!dragging) return;
+      setPopupOffset({
+        x: e.clientX - dragStart.x,
+        y: e.clientY - dragStart.y
+      });
+    };
+
+    const handleMouseUp = () => {
+      setDragging(false);
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (!dragging || e.touches.length === 0) return;
+      const touch = e.touches[0];
+      setPopupOffset({
+        x: touch.clientX - dragStart.x,
+        y: touch.clientY - dragStart.y
+      });
+    };
+
+    const handleTouchEnd = () => {
+      setDragging(false);
+    };
+
+    if (dragging) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+      window.addEventListener('touchmove', handleTouchMove, { passive: true });
+      window.addEventListener('touchend', handleTouchEnd);
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [dragging, dragStart]);
+
   const handleCheckCurrentAnswer = () => {
     const q = questions[currentIdx];
+    const uAns = userAnswers[q.id];
+    const isCorrect = checkAnswerCorrectness(q, uAns);
+    setIsCorrectPopup(isCorrect);
+    setPopupOffset({ x: 0, y: 0 });
+
     setCheckedAnswers(prev => ({
       ...prev,
       [q.id]: true
     }));
+    setShowPracticePopup(true);
+  };
+
+  const handleLeaveRoom = () => {
+    localStorage.removeItem(saveKey);
+    onBackToDashboard();
   };
 
   // Quy đổi giây sang MM:SS
@@ -361,22 +529,7 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
   const currentAnswer = userAnswers[currentQuestion.id];
   const isQuestionChecked = checkedAnswers[currentQuestion.id] || isSubmitted;
 
-  // Mascot động phản hồi tại chỗ trong phòng luyện tập
-  const getPracticeMascotMood = () => {
-    if (!isQuestionChecked) return 'thinking';
-    const isCorrect = checkAnswerCorrectness(currentQuestion, currentAnswer);
-    return isCorrect ? 'happy' : 'sad';
-  };
 
-  const getPracticeMascotSpeech = () => {
-    if (!isQuestionChecked) {
-      return `Câu ${currentIdx + 1} này thuộc khối kiến thức "${currentQuestion.category}". Bạn đã chọn đáp án chưa? Hãy phân tích kỹ rồi trả lời nhé!`;
-    }
-    const isCorrect = checkAnswerCorrectness(currentQuestion, currentAnswer);
-    return isCorrect
-      ? "Tuyệt vời ông mặt trời! Bạn đã trả lời đúng câu hỏi này rồi. Đọc thêm giải thích bên dưới để củng cố nhé! 🎉"
-      : "Tiếc quá, chưa chính xác mất rồi! Nhưng không sao cả, sai một câu để nhớ lâu hơn. Hãy đọc mẹo ghi nhớ bên dưới nha! 💪";
-  };
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col md:flex-row relative" id="exam_room_layout">
@@ -387,7 +540,7 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
         <header className="bg-white border-b px-6 py-4 flex justify-between items-center shadow-sm sticky top-0 z-10">
           <div className="flex items-center gap-3">
             <button
-              onClick={onBackToDashboard}
+              onClick={handleLeaveRoom}
               id="btn_back_dashboard"
               className="p-2 border rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-all flex items-center gap-1 text-xs font-bold"
             >
@@ -395,7 +548,7 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
             </button>
             <div>
               <span className="text-[10px] uppercase font-bold text-slate-500 bg-slate-100 px-2.5 py-0.5 rounded-md border">
-                {mode === 'practice' ? 'Chế độ: Luyện Tập 📚' : 'Chế độ: Kiểm Tra ⚡'}
+                {isReviewMode ? 'Chế độ: Xem Lại Bài Làm 🔍' : mode === 'practice' ? 'Chế độ: Luyện Tập 📚' : 'Chế độ: Kiểm Tra ⚡'}
               </span>
               <h2 className="font-extrabold text-slate-800 text-sm md:text-base leading-snug mt-1">
                 {test.title}
@@ -405,7 +558,7 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
 
           <div className="flex items-center gap-4">
             {/* ĐỒNG HỒ ĐẾM NGƯỢC (EXAM MODE) */}
-            {mode === 'exam' && !isSubmitted && (
+            {mode === 'exam' && !isSubmitted && !isReviewMode && (
               <div className={`flex items-center gap-2 font-mono font-bold text-sm md:text-base px-3.5 py-1.5 rounded-xl border ${timeLeft < 120 ? 'bg-rose-50 border-rose-200 text-rose-600 animate-pulse' : 'bg-slate-50 text-slate-800'}`} id="countdown_clock">
                 <Clock className="w-4.5 h-4.5" />
                 <span>{formatTime(timeLeft)}</span>
@@ -413,26 +566,26 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
             )}
             
             {/* THỜI GIAN ĐÃ QUA (PRACTICE MODE) */}
-            {mode === 'practice' && !isSubmitted && (
+            {mode === 'practice' && !isSubmitted && !isReviewMode && (
               <div className="flex items-center gap-2 font-mono font-bold text-xs text-slate-500 px-3 py-1 rounded-lg bg-slate-50 border">
                 <span>⏱️ {formatTime(timeSpent)}</span>
               </div>
             )}
 
-            {!isSubmitted && (
+            {/* QUAY LẠI BẢNG ĐIỂM (REVIEW MODE) */}
+            {isReviewMode && (
               <button
-                onClick={handleActiveSubmit}
-                id="btn_submit_exam"
-                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-extrabold text-xs md:text-sm flex items-center gap-1.5 shadow-md active:scale-95 transition-all"
+                onClick={() => setIsReviewMode(false)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow cursor-pointer flex items-center gap-1.5 active:scale-95"
               >
-                Nộp Bài <Send className="w-4 h-4" />
+                📊 Bảng Điểm
               </button>
             )}
           </div>
         </header>
 
         {/* HÀNH TRÌNH PHIÊU LƯU VŨ TRỤ (Mascot Adventure Trail) */}
-        {!isSubmitted && (
+        {(!isSubmitted || isReviewMode) && (
           <div className="bg-gradient-to-r from-slate-900 to-indigo-950 py-3.5 px-6 border-b relative overflow-hidden" id="adventure_trail">
             <div className="max-w-4xl mx-auto flex items-center justify-between relative h-10">
               {/* Đường ray */}
@@ -442,13 +595,35 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
               {Array.from({ length: totalQuestions }).map((_, idx) => {
                 const isPassed = idx < currentIdx;
                 const isActive = idx === currentIdx;
+                const q = questions[idx];
+                const uAns = userAnswers[q?.id];
+                const isCorrect = q ? checkAnswerCorrectness(q, uAns) : false;
+
+                let trailClass = '';
+                if (isReviewMode) {
+                  if (isActive) {
+                    trailClass = 'bg-cyan-400 border-cyan-300 text-slate-900 ring-4 ring-cyan-500/30';
+                  } else if (isCorrect) {
+                    trailClass = 'bg-emerald-600 border-emerald-500 text-white';
+                  } else {
+                    trailClass = 'bg-rose-600 border-rose-500 text-white';
+                  }
+                } else {
+                  trailClass = isPassed 
+                    ? 'bg-indigo-600 border-indigo-500 text-white' 
+                    : isActive 
+                      ? 'bg-cyan-400 border-cyan-300 text-slate-900 ring-4 ring-cyan-500/30' 
+                      : 'bg-slate-800 border-slate-700 text-slate-500';
+                }
+
                 return (
-                  <div
+                  <button
                     key={idx}
-                    className={`relative z-10 w-6 h-6 rounded-full flex items-center justify-center font-bold text-[10px] border-2 transition-all duration-300 ${isPassed ? 'bg-indigo-600 border-indigo-500 text-white' : isActive ? 'bg-cyan-400 border-cyan-300 text-slate-900 ring-4 ring-cyan-500/30' : 'bg-slate-800 border-slate-700 text-slate-500'}`}
+                    onClick={() => setCurrentIdx(idx)}
+                    className={`relative z-10 w-6 h-6 rounded-full flex items-center justify-center font-bold text-[10px] border-2 transition-all duration-300 cursor-pointer ${trailClass}`}
                   >
                     {idx + 1}
-                  </div>
+                  </button>
                 );
               })}
 
@@ -474,7 +649,7 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
         {/* PHẦN HIỂN THỊ NỘI DUNG CÂU HỎI HOẶC KẾT QUẢ */}
         <div className="flex-grow p-6 md:p-8 max-w-4xl mx-auto w-full">
           <AnimatePresence mode="wait">
-            {!isSubmitted ? (
+            {!isSubmitted || isReviewMode ? (
               // BẢNG CÂU HỎI ĐANG LÀM
               <motion.div
                 key={currentQuestion.id}
@@ -484,12 +659,36 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
                 className="bg-white rounded-3xl p-6 md:p-8 border shadow-lg space-y-6"
               >
                 {/* Thông số câu */}
-                <div className="flex justify-between items-center border-b pb-4">
-                  <span className="font-extrabold text-slate-800 text-base">
-                    CÂU HỎI {currentIdx + 1} / {totalQuestions}
-                  </span>
+                <div className="flex justify-between items-center border-b pb-4 flex-wrap gap-2">
+                  <div className="flex items-center gap-3">
+                    <span className="font-extrabold text-slate-800 text-base">
+                      CÂU HỎI {currentIdx + 1} / {totalQuestions}
+                    </span>
+                    {isReviewMode ? (
+                      <span className={`text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1 ${checkAnswerCorrectness(currentQuestion, currentAnswer) ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                        {checkAnswerCorrectness(currentQuestion, currentAnswer) ? (
+                          <><CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Trả lời Đúng</>
+                        ) : (
+                          <><XCircle className="w-3.5 h-3.5 text-rose-600" /> Chưa Đúng</>
+                        )}
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => toggleFlag(currentQuestion.id)}
+                        className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer ${
+                          flaggedQuestions[currentQuestion.id]
+                            ? 'bg-rose-50 border-rose-300 text-rose-600 shadow-sm'
+                            : 'bg-white border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+                        }`}
+                        title={flaggedQuestions[currentQuestion.id] ? "Bỏ gắn cờ câu hỏi này" : "Gắn cờ để xem lại sau"}
+                      >
+                        <Flag className={`w-3.5 h-3.5 ${flaggedQuestions[currentQuestion.id] ? 'fill-rose-600 stroke-rose-600' : ''}`} />
+                        {flaggedQuestions[currentQuestion.id] ? "Đã đặt cờ" : "Đặt cờ"}
+                      </button>
+                    )}
+                  </div>
                   
-                  {mode === 'practice' && (
+                  {mode === 'practice' && !isReviewMode && (
                     <span className={`text-[10px] font-bold px-3 py-1 rounded-full ${isQuestionChecked ? (checkAnswerCorrectness(currentQuestion, currentAnswer) ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800') : 'bg-amber-100 text-amber-800'}`}>
                       {isQuestionChecked ? (checkAnswerCorrectness(currentQuestion, currentAnswer) ? '✓ Trả lời đúng' : '✘ Chưa chính xác') : '🌱 Luyện tập tự do'}
                     </span>
@@ -500,21 +699,11 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
                   question={currentQuestion}
                   userAnswer={currentAnswer}
                   onChangeAnswer={(ans) => handleAnswerChange(currentQuestion.id, ans)}
-                  isSubmitted={isQuestionChecked}
-                  mode={mode}
-                  onCheckAnswer={handleCheckCurrentAnswer}
+                  isSubmitted={isReviewMode ? true : isQuestionChecked}
+                  mode={isReviewMode ? 'practice' : mode}
                 />
 
-                {/* KHU VỰC MASCOT ĐỒNG HÀNH LUYỆN TẬP */}
-                {mode === 'practice' && (
-                  <div className="mt-8 border-t pt-5">
-                    <Mascot
-                      type={test.level === 1 ? 'robot' : test.level === 2 ? 'fox' : 'panda'}
-                      mood={getPracticeMascotMood()}
-                      speechBubble={getPracticeMascotSpeech()}
-                    />
-                  </div>
-                )}
+
 
                 {/* ĐIỀU HƯỚNG CÂU HỎI */}
                 <div className="flex justify-between items-center border-t pt-5 mt-8">
@@ -522,19 +711,90 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
                     disabled={currentIdx === 0}
                     onClick={() => setCurrentIdx(prev => prev - 1)}
                     id="btn_prev_question"
-                    className="px-4.5 py-2 rounded-xl border font-bold text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-30 disabled:hover:bg-transparent flex items-center gap-1"
+                    className="px-5 py-2.5 h-11 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 disabled:opacity-30 disabled:hover:bg-transparent font-bold text-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                   >
                     <ArrowLeft className="w-4 h-4" /> Câu trước
                   </button>
 
-                  <button
-                    disabled={currentIdx === totalQuestions - 1}
-                    onClick={() => setCurrentIdx(prev => prev + 1)}
-                    id="btn_next_question"
-                    className="px-4.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm disabled:opacity-30 flex items-center gap-1"
-                  >
-                    Câu tiếp <ArrowRight className="w-4 h-4" />
-                  </button>
+                  {isReviewMode ? (
+                    currentIdx < totalQuestions - 1 ? (
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={() => setIsReviewMode(false)}
+                          className="px-4 py-2.5 h-11 border border-indigo-200 hover:bg-indigo-50 text-indigo-600 rounded-xl font-bold text-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 animate-pulse"
+                        >
+                          Bảng điểm 📊
+                        </button>
+                        <button
+                          onClick={() => setCurrentIdx(prev => prev + 1)}
+                          id="btn_next_question_review"
+                          className="px-5 py-2.5 h-11 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                        >
+                          Câu tiếp <ArrowRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setIsReviewMode(false)}
+                        id="btn_finish_review"
+                        className="px-5 py-2.5 h-11 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md active:scale-95"
+                      >
+                        Quay lại Bảng điểm <CheckCircle2 className="w-4 h-4" />
+                      </button>
+                    )
+                  ) : mode === 'exam' ? (
+                    currentIdx === totalQuestions - 1 ? (
+                      <button
+                        onClick={handleActiveSubmit}
+                        id="btn_submit_exam_last_question"
+                        className="px-5 py-2.5 h-11 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-extrabold text-sm flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
+                      >
+                        Nộp Bài Thi <Send className="w-4 h-4" />
+                      </button>
+                    ) : (
+                      <button
+                        disabled={currentIdx === totalQuestions - 1}
+                        onClick={() => setCurrentIdx(prev => prev + 1)}
+                        id="btn_next_question"
+                        className="px-5 py-2.5 h-11 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm disabled:opacity-30 flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                      >
+                        Câu tiếp <ArrowRight className="w-4 h-4" />
+                      </button>
+                    )
+                  ) : (
+                    // mode === 'practice' hoặc 'race'
+                    !isQuestionChecked ? (
+                      <button
+                        id="btn_check_answer"
+                        disabled={currentAnswer === undefined || currentAnswer === null || (Array.isArray(currentAnswer) && currentAnswer.length === 0)}
+                        onClick={handleCheckCurrentAnswer}
+                        className="px-5 py-2.5 h-11 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm transition-all shadow-md disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none cursor-pointer flex items-center justify-center gap-1.5"
+                      >
+                        Kiểm tra đáp án
+                      </button>
+                    ) : (
+                      currentIdx < totalQuestions - 1 ? (
+                        <button
+                          onClick={() => setCurrentIdx(prev => prev + 1)}
+                          id="btn_next_question_practice"
+                          className="px-5 py-2.5 h-11 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                        >
+                          Câu tiếp <ArrowRight className="w-4 h-4" />
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setIsSubmitted(true);
+                            processResults(timeSpent);
+                          }}
+                          id="btn_submit_practice_last"
+                          className="px-5 py-2.5 h-11 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-extrabold text-sm flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
+                        >
+                          Hoàn Thành <CheckCircle2 className="w-4 h-4" />
+                        </button>
+                      )
+                    )
+                  )}
                 </div>
               </motion.div>
             ) : (
@@ -548,23 +808,23 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
               >
                 {/* 1. CARD ĐIỂM SỐ CHÍNH */}
                 <div className="bg-white rounded-3xl border shadow-xl p-6 md:p-8 text-center space-y-6 relative overflow-hidden">
-                  {/* Pháo hoa/Ngôi sao bay lượn nếu điểm cao */}
-                  {Math.round((questions.filter(q => checkAnswerCorrectness(q, userAnswers[q.id])).length / questions.length) * 100) >= 50 && (
-                    <div className="absolute inset-0 pointer-events-none opacity-25">
-                      <div className="absolute top-10 left-10 text-3xl animate-bounce">✨</div>
-                      <div className="absolute top-5 right-20 text-2xl animate-ping">🎉</div>
-                      <div className="absolute bottom-10 left-1/4 text-4xl animate-bounce">🎈</div>
-                      <div className="absolute bottom-5 right-10 text-3xl animate-ping">🌟</div>
-                    </div>
-                  )}
-
                   {(() => {
                     const correctCount = questions.filter(q => checkAnswerCorrectness(q, userAnswers[q.id])).length;
                     const finalScore = Math.round((correctCount / questions.length) * 100);
-                    const isPass = finalScore >= 50;
+                    const isPass = correctCount === questions.length;
 
                     return (
                       <>
+                        {/* Pháo hoa/Ngôi sao bay lượn nếu đậu */}
+                        {isPass && (
+                          <div className="absolute inset-0 pointer-events-none opacity-25">
+                            <div className="absolute top-10 left-10 text-3xl animate-bounce">✨</div>
+                            <div className="absolute top-5 right-20 text-2xl animate-ping">🎉</div>
+                            <div className="absolute bottom-10 left-1/4 text-4xl animate-bounce">🎈</div>
+                            <div className="absolute bottom-5 right-10 text-3xl animate-ping">🌟</div>
+                          </div>
+                        )}
+
                         <div className="space-y-1">
                           <h2 className="text-2xl font-black text-slate-800">
                             HÀNH TRÌNH THI KẾT THÚC!
@@ -574,25 +834,35 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
                           </p>
                         </div>
 
-                        {/* Vòng tròn điểm số */}
-                        <div className="relative w-36 h-36 mx-auto flex items-center justify-center rounded-full bg-slate-50 border-8 border-slate-100 shadow-inner">
-                          <svg className="absolute inset-0 w-full h-full transform -rotate-90">
-                            <circle
-                              cx="72"
-                              cy="72"
-                              r="64"
-                              fill="transparent"
-                              stroke={isPass ? '#10b981' : '#f43f5e'}
-                              strokeWidth="8"
-                              strokeDasharray={`${(finalScore / 100) * 401} 401`}
-                              className="transition-all duration-1000"
-                            />
-                          </svg>
-                          <div className="text-center z-10">
-                            <h3 className={`text-4xl font-black ${isPass ? 'text-emerald-600' : 'text-rose-600'}`}>
-                              {finalScore}
-                            </h3>
-                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Điểm số</p>
+                        {/* Vòng tròn điểm số và Trạng thái Đậu/Rớt */}
+                        <div className="flex flex-col sm:flex-row items-center justify-center gap-6 max-w-sm mx-auto">
+                          <div className="relative w-36 h-36 flex items-center justify-center rounded-full bg-slate-50 border-8 border-slate-100 shadow-inner">
+                            <svg className="absolute inset-0 w-full h-full transform -rotate-90">
+                              <circle
+                                cx="72"
+                                cy="72"
+                                r="64"
+                                fill="transparent"
+                                stroke={isPass ? '#10b981' : '#f43f5e'}
+                                strokeWidth="8"
+                                strokeDasharray={`${(finalScore / 100) * 401} 401`}
+                                className="transition-all duration-1000"
+                              />
+                            </svg>
+                            <div className="text-center z-10">
+                              <h3 className={`text-4xl font-black ${isPass ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                {finalScore}
+                              </h3>
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Điểm số</p>
+                            </div>
+                          </div>
+
+                          <div className={`px-6 py-4 rounded-2xl border-4 text-center font-black uppercase text-xl w-36 shadow-md ${
+                            isPass 
+                              ? 'bg-emerald-50 text-emerald-600 border-emerald-500' 
+                              : 'bg-rose-50 text-rose-600 border-rose-500'
+                          }`}>
+                            {isPass ? 'ĐẬU 🎉' : 'RỚT 😢'}
                           </div>
                         </div>
 
@@ -612,17 +882,15 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
                           </div>
                         </div>
 
-                        {/* Mascot chúc mừng hân hoan hoặc động viên chân thành */}
-                        <div className="pt-4 max-w-xl mx-auto">
-                          <Mascot
-                            type={test.level === 1 ? 'robot' : test.level === 2 ? 'fox' : 'panda'}
-                            mood={isPass ? 'excited' : 'sad'}
-                            speechBubble={
-                              isPass
-                                ? `Yeeee! Chúc mừng bạn đã thi đỗ xuất sắc với ${finalScore} điểm! Bạn thực sự là một chiến binh dũng mãnh trên Đảo Level ${test.level}. Thầy cô và Mascot tự hào về bạn! 🏅`
-                                : `Mascot rất tiếc vì bài thi lần này chưa đạt chuẩn (dưới 50 điểm). Nhưng không sao đâu nè, hãy nhấn "Làm lại đề này" và ôn luyện nhiều lần ở Chế độ Luyện Tập để nắm vững kiến thức nhé! Mascot luôn tin bạn làm được. 💖`
-                            }
-                          />
+                        {/* Thông điệp chúc mừng hân hoan hoặc động viên chân thành */}
+                        <div className="pt-4 max-w-xl mx-auto text-center">
+                          <div className={`p-5 rounded-2xl border ${isPass ? 'bg-emerald-50 border-emerald-100 text-emerald-800' : 'bg-rose-50 border-rose-100 text-rose-800'}`}>
+                            <p className="text-sm font-semibold leading-relaxed">
+                              {isPass
+                                ? `🎉 Tuyệt vời! Bạn đã xuất sắc THI ĐỖ với số điểm tối đa 100/100! Thầy cô rất tự hào về bạn! 🏅`
+                                : `😢 Rất tiếc, bài thi lần này bạn đã bị RỚT vì làm sai ${questions.length - correctCount} câu (Yêu cầu phải làm đúng 100% tất cả câu hỏi trong đề để đỗ). Hãy làm lại để rèn luyện nhé! Thầy cô luôn tin bạn làm được. 💖`}
+                            </p>
+                          </div>
                         </div>
                       </>
                     );
@@ -696,7 +964,7 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
                             ) : finalScore >= 50 ? (
                               <p>Bạn đã vượt qua bài thi! Tuy nhiên vẫn còn một số điểm cần lưu ý. Hãy nhấn vào danh sách câu hỏi bên dưới để xem lại giải thích đáp án của các câu làm sai.</p>
                             ) : (
-                              <p>Bạn cần rèn luyện chăm chỉ hơn. Mascot khuyên bạn nên làm lại đề này ở <strong>Chế độ Luyện Tập</strong> để được xem lời giải thích chi tiết ngay lập tức cho từng câu hỏi.</p>
+                              <p>Bạn cần rèn luyện chăm chỉ hơn. Hệ thống khuyên bạn nên làm lại đề này ở <strong>Chế độ Luyện Tập</strong> để được xem lời giải thích chi tiết ngay lập tức cho từng câu hỏi.</p>
                             )}
                           </div>
                         </div>
@@ -705,72 +973,56 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
                   })()}
                 </div>
 
-                {/* 4. KHU VỰC XEM LẠI CHI TIẾT TỪNG CÂU HỎI ĐÃ LÀM */}
-                <div className="bg-white rounded-3xl border shadow-md p-6 space-y-6">
-                  <div className="border-b pb-3">
-                    <h3 className="font-extrabold text-slate-800 text-base md:text-lg">
-                      Chi Tiết Đáp Án Từng Câu Hỏi
+                {/* 4. NÚT XEM LẠI BÀI THI CHUYÊN NGHIỆP */}
+                <div className="bg-white rounded-3xl border shadow-md p-8 text-center space-y-4">
+                  <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center text-2xl mx-auto border-2 border-indigo-100 animate-pulse">
+                    👁️‍🗨️
+                  </div>
+                  <div className="space-y-1">
+                    <h3 className="font-extrabold text-slate-800 text-lg">
+                      Xem lại chi tiết từng câu hỏi
                     </h3>
-                    <p className="text-xs text-slate-500">Đối chiếu trực quan câu trả lời của bạn với đáp án đúng của hội đồng chấm thi.</p>
+                    <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                      Nhấn nút bên dưới để xem lại chi tiết bài thi theo giao diện từng câu hỏi trực quan để dễ dàng nắm bắt kiến thức và lời giải.
+                    </p>
                   </div>
+                  <button
+                    onClick={() => {
+                      setCurrentIdx(0);
+                      setIsReviewMode(true);
+                    }}
+                    id="btn_show_review_details"
+                    className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-2xl text-sm transition-all shadow-md active:scale-95 cursor-pointer inline-flex items-center gap-2"
+                  >
+                    🔍 Xem Lại Bài Thi (Từng Câu Hỏi)
+                  </button>
+                </div>
 
-                  <div className="space-y-10">
-                    {questions.map((q, idx) => {
-                      const uAns = userAnswers[q.id];
-                      const isCorrect = checkAnswerCorrectness(q, uAns);
-
-                      return (
-                        <div key={q.id} className="border-b pb-8 last:border-0 last:pb-0 space-y-4">
-                          <div className="flex items-center justify-between gap-2.5">
-                            <span className="text-xs font-extrabold text-slate-800">
-                              CÂU HỎI {idx + 1}
-                            </span>
-                            <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1 ${isCorrect ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
-                              {isCorrect ? (
-                                <><CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Trả lời Đúng (+10đ)</>
-                              ) : (
-                                <><XCircle className="w-3.5 h-3.5 text-rose-600" /> Chưa Đúng (0đ)</>
-                              )}
-                            </span>
-                          </div>
-
-                          <QuestionRenderer
-                            question={q}
-                            userAnswer={uAns}
-                            onChangeAnswer={() => {}} // Khóa không cho thay đổi đáp án
-                            isSubmitted={true} // Bắt buộc show đáp án đúng và giải thích
-                            mode="practice"
-                          />
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* CÁC NÚT ĐIỀU HƯỚNG KẾT THÚC */}
-                  <div className="flex flex-col sm:flex-row gap-3 pt-6 border-t justify-end">
-                    <button
-                      onClick={() => {
-                        // Reset lại trạng thái để làm lại
-                        setIsSubmitted(false);
-                        setTimeSpent(0);
-                        setLeftTime(test.timeLimit * 60);
-                        setUserAnswers({});
-                        setCurrentIdx(0);
-                        setCheckedAnswers({});
-                      }}
-                      id="btn_retry_test"
-                      className="px-5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold rounded-xl text-sm transition-all text-center"
-                    >
-                      🔄 Làm lại đề này
-                    </button>
-                    <button
-                      onClick={onBackToDashboard}
-                      id="btn_return_dashboard"
-                      className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl text-sm transition-all text-center shadow"
-                    >
-                      Quay Lại Dashboard 🏝️
-                    </button>
-                  </div>
+                {/* CÁC NÚT ĐIỀU HƯỚNG KẾT THÚC LUÔN HIỂN THỊ */}
+                <div className="flex flex-col sm:flex-row gap-3 pt-4 justify-end">
+                  <button
+                    onClick={() => {
+                      // Reset lại trạng thái để làm lại
+                      setIsSubmitted(false);
+                      setIsReviewMode(false);
+                      setTimeSpent(0);
+                      setLeftTime(test.timeLimit * 60);
+                      setUserAnswers({});
+                      setCurrentIdx(0);
+                      setCheckedAnswers({});
+                    }}
+                    id="btn_retry_test"
+                    className="px-5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold rounded-xl text-sm transition-all text-center cursor-pointer"
+                  >
+                    🔄 Làm lại đề này
+                  </button>
+                  <button
+                    onClick={handleLeaveRoom}
+                    id="btn_return_dashboard"
+                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl text-sm transition-all text-center shadow cursor-pointer"
+                  >
+                    Quay Lại Dashboard 🏝️
+                  </button>
                 </div>
               </motion.div>
             )}
@@ -807,9 +1059,14 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
                     key={idx}
                     id={`btn_nav_q_${idx}`}
                     onClick={() => setCurrentIdx(idx)}
-                    className={`w-full aspect-square rounded-xl border-2 text-xs md:text-sm font-semibold transition-all flex items-center justify-center ${btnClass}`}
+                    className={`w-full aspect-square rounded-xl border-2 text-xs md:text-sm font-semibold transition-all flex items-center justify-center relative ${btnClass}`}
                   >
                     {idx + 1}
+                    {flaggedQuestions[q.id] && (
+                      <span className="absolute -top-1 -right-1 bg-rose-500 text-white p-0.5 rounded-full border border-white flex items-center justify-center animate-pulse">
+                        <Flag className="w-2 h-2 fill-current stroke-current" />
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -829,29 +1086,106 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
                 <span className="w-3.5 h-3.5 bg-indigo-600 border-2 border-indigo-600 rounded-md"></span>
                 <span>Đang làm hiện tại</span>
               </div>
+              <div className="flex items-center gap-2">
+                <span className="w-3.5 h-3.5 bg-rose-50 border-2 border-rose-400 rounded-md flex items-center justify-center text-rose-500">
+                  <Flag className="w-2 h-2 fill-current" />
+                </span>
+                <span>Câu hỏi đã đặt cờ</span>
+              </div>
             </div>
           </div>
 
           <div className="mt-6 border-t pt-4 space-y-3.5">
-            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/50 flex items-center gap-3">
+            <div className="bg-indigo-50/50 p-3.5 rounded-xl border border-indigo-100 flex items-center gap-3">
               <div className="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center text-xl">
-                {test.level === 1 ? '🤖' : test.level === 2 ? '🦊' : '🐼'}
+                📝
               </div>
               <div className="overflow-hidden">
-                <h4 className="font-extrabold text-xs text-slate-800 truncate">Sát cánh thám hiểm!</h4>
-                <p className="text-[10px] text-slate-500 leading-tight">Mascot đang đồng hành và hỗ trợ bạn đắc lực.</p>
+                <h4 className="font-extrabold text-xs text-indigo-950 truncate">Tập trung làm bài!</h4>
+                <p className="text-[10px] text-indigo-700 leading-tight">Hãy đọc kỹ đề bài và suy nghĩ cẩn thận trước khi chọn.</p>
               </div>
             </div>
-
-            <button
-              onClick={handleActiveSubmit}
-              id="btn_nav_submit_bottom"
-              className="w-full py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex justify-center items-center gap-1.5 transition-all shadow active:scale-[0.98]"
-            >
-              Nộp Bài Thi <Send className="w-3.5 h-3.5" />
-            </button>
           </div>
         </aside>
+      )}
+
+      {/* Pop up kiểm tra đáp án cho chế độ luyện tập - có thể kéo di chuyển được */}
+      {showPracticePopup && (
+        <div
+          style={{
+            left: 'calc(50% - 160px)',
+            top: '30%',
+            transform: `translate(${popupOffset.x}px, ${popupOffset.y}px)`,
+          }}
+          className="fixed w-80 bg-white border-4 border-[#2D3436] rounded-3xl shadow-[8px_8px_0px_0px_rgba(45,52,54,0.15)] z-[9999] select-none pointer-events-auto overflow-hidden animate-fadeIn"
+          id="practice_correctness_popup"
+        >
+          {/* Header - drag handle */}
+          <div
+            onMouseDown={handleMouseDown}
+            onTouchStart={handleTouchStart}
+            className="bg-[#2D3436] text-white px-4 py-2.5 flex justify-between items-center cursor-grab active:cursor-grabbing text-xs font-black uppercase tracking-wider select-none border-b-2 border-[#2D3436]"
+          >
+            <span className="flex items-center gap-1">✥ Ấn giữ để di chuyển</span>
+            <span className="text-[10px] bg-slate-700 px-1.5 py-0.5 rounded font-mono">
+              {mode === 'race' ? 'Đường Đua 🏎️' : 'Luyện Tập'}
+            </span>
+          </div>
+
+          {/* Body */}
+          <div className="p-6 text-center space-y-4">
+            {isCorrectPopup ? (
+              <div className="space-y-2">
+                <div className="text-4xl">🎉 CHÍNH XÁC!</div>
+                <p className="text-xs font-black text-emerald-600 uppercase">
+                  Bạn đã chọn đáp án đúng!
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="text-4xl">❌ CHƯA ĐÚNG!</div>
+                <p className="text-xs font-black text-rose-600 uppercase">
+                  {mode === 'race' ? 'Va chạm đường đua!' : 'Đáp án chưa chính xác!'}
+                </p>
+              </div>
+            )}
+
+            <p className="text-[10px] text-slate-500 font-bold leading-normal">
+              {mode === 'race' && !isCorrectPopup
+                ? "BẠN ĐÃ THẤT BẠI! Nhấn OK để lập tức QUAY VỀ CÂU 1 và làm lại từ đầu."
+                : currentIdx === totalQuestions - 1
+                  ? "Đây là câu hỏi cuối cùng. Nhấn OK để tự động nộp bài."
+                  : "Nhấn OK để chuyển sang câu tiếp theo."}
+            </p>
+
+            <button
+              onClick={() => {
+                if (mode === 'race' && !isCorrectPopup) {
+                  // Reset to question 1 and clear answers for race mode
+                  setCurrentIdx(0);
+                  setCheckedAnswers({});
+                  setUserAnswers({});
+                  setShowPracticePopup(false);
+                } else if (currentIdx === totalQuestions - 1) {
+                  setIsSubmitted(true);
+                  processResults(timeSpent);
+                  setShowPracticePopup(false);
+                } else {
+                  setCurrentIdx(prev => prev + 1);
+                  setShowPracticePopup(false);
+                }
+              }}
+              className={`w-full py-2.5 text-white font-black rounded-xl border-2 border-[#2D3436] text-xs transition-all shadow-[2px_2px_0px_0px_rgba(45,52,54,1)] hover:translate-y-0.5 hover:shadow-[1px_1px_0px_0px_rgba(45,52,54,1)] cursor-pointer ${
+                isCorrectPopup 
+                  ? 'bg-[#00B894] hover:bg-[#00a383]' 
+                  : 'bg-[#FF7675] hover:bg-[#e56766]'
+              }`}
+              id="btn_popup_ok"
+            >
+              ĐỒNG Ý (OK)
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -14,7 +14,7 @@ export default function Home() {
   const [isDbReady, setIsDbReady] = useState<boolean>(false);
   const [currentUser, setCurrentUser] = useState<any | null>(null);
   const [userRole, setUserRole] = useState<'student' | 'admin' | null>(null);
-  const [activeTest, setActiveTest] = useState<{ test: Test; mode: 'practice' | 'exam' } | null>(null);
+  const [activeTest, setActiveTest] = useState<{ test: Test; mode: 'practice' | 'exam' | 'race' } | null>(null);
 
   // Khởi tạo cơ sở dữ liệu và đồng bộ từ Google Sheets trên Client-side
   useEffect(() => {
@@ -94,7 +94,7 @@ export default function Home() {
 
 
   // Khi học sinh chọn một bộ đề
-  const handleSelectTest = (test: Test, mode: 'practice' | 'exam') => {
+  const handleSelectTest = (test: Test, mode: 'practice' | 'exam' | 'race') => {
     setActiveTest({ test, mode });
   };
 
