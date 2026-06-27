@@ -171,21 +171,50 @@ export async function syncDatabaseFromGoogleSheets(): Promise<{
 
     // 4. Process test catalog (exam_catalog)
     const rawCatalog = rawData.exam_catalog || [];
-    const tests: Test[] = rawCatalog
-      .filter((t: any) => String(t.active).toUpperCase() === 'TRUE' || t.active === true || t.active === 1 || String(t.active) === '1')
-      .map((t: any) => {
-        return {
-          id: String(t.exam_id),
-          code: String(t.exam_id),
-          level: mapSheetLevel(t.level),
-          title: String(t.exam_name),
-          description: `Yêu cầu đạt: đúng hết tất cả câu.`,
-          category: mapSheetCategory(t.category),
-          timeLimit: Number(t.time_limit || 15),
-          questionsCount: 10, // will update dynamically if cached or loaded
-          sheetName: String(t.sheet_name) // extra property for fetching questions
-        };
+    const sheetNames: string[] = Array.isArray(rawData.sheetNames) ? rawData.sheetNames.map((sn: any) => String(sn).trim()) : [];
+    const tests: Test[] = [];
+
+    for (const t of rawCatalog) {
+      const isActive = String(t.active).toUpperCase() === 'TRUE' || t.active === true || t.active === 1 || String(t.active) === '1';
+      if (!isActive) continue;
+
+      const examId = String(t.exam_id).trim();
+      const sheetName = String(t.sheet_name || examId).trim();
+
+      // Detect manually deleted sheets and auto-heal
+      if (sheetNames.length > 0 && !sheetNames.includes(sheetName)) {
+        console.warn(`Detected deleted/missing Google Sheet tab: ${sheetName}. Automatically removing from exam_catalog...`);
+        deleteRowInGoogleSheet('exam_catalog', 'exam_id', examId).catch((err) => {
+          console.error(`Failed to automatically delete missing sheet record from exam_catalog: ${examId}`, err);
+        });
+        continue;
+      }
+
+      tests.push({
+        id: examId,
+        code: examId,
+        level: mapSheetLevel(t.level),
+        title: String(t.exam_name),
+        description: `Yêu cầu đạt: đúng hết tất cả câu.`,
+        category: mapSheetCategory(t.category),
+        timeLimit: Number(t.time_limit || 15),
+        questionsCount: 10
       });
+    }
+
+    // Detect unlisted sheets (created directly in Google Sheet)
+    const systemSheets = ['students', 'admin', 'exam_catalog', 'results', 'login_logs'];
+    const unlistedSheets = sheetNames.filter(name => 
+      !systemSheets.includes(name.toLowerCase()) && 
+      !tests.some(t => t.code === name)
+    );
+    if (typeof window !== 'undefined') {
+      if (unlistedSheets.length > 0) {
+        localStorage.setItem('ic3_unlisted_sheets', JSON.stringify(unlistedSheets));
+      } else {
+        localStorage.removeItem('ic3_unlisted_sheets');
+      }
+    }
 
     // 5. Process students list with calculated stats from results
     const rawStudents = rawData.students || [];
@@ -306,127 +335,286 @@ export async function fetchQuestionsFromGoogleSheet(sheetName: string, testCode:
     return rawQuestions.map((q: any, idx: number) => {
       const qType = mapSheetQuestionType(q.type);
       
-      // Parse options
+      // First, get raw dynamic options from legacy columns or a string
+      const optionKeys = Object.keys(q)
+        .filter(key => /^option[a-zA-Z0-9]+$/i.test(key) && key.toLowerCase() !== 'options')
+        .sort((a, b) => {
+          const aSuffix = a.substring(6).toUpperCase();
+          const bSuffix = b.substring(6).toUpperCase();
+          if (aSuffix.length === 1 && bSuffix.length === 1) {
+            return aSuffix.charCodeAt(0) - bSuffix.charCodeAt(0);
+          }
+          return aSuffix.localeCompare(bSuffix, undefined, { numeric: true });
+        });
+      
+      let legacyOptions: string[] = optionKeys
+        .map(key => q[key] ? String(q[key]).trim() : '')
+        .filter(Boolean);
+
+      // Determine parsed options & answer from JSON columns, falling back to legacy
       let options: any = undefined;
       let correctAnswer: any = undefined;
 
-      const optA = q.optionA ? String(q.optionA).trim() : '';
-      const optB = q.optionB ? String(q.optionB).trim() : '';
-      const optC = q.optionC ? String(q.optionC).trim() : '';
-      const optD = q.optionD ? String(q.optionD).trim() : '';
+      // Helper to try parsing options JSON
+      let parsedOptionsJson: any = null;
+      if (q.options !== undefined && q.options !== null && String(q.options).trim() !== '') {
+        try {
+          parsedOptionsJson = JSON.parse(String(q.options).trim());
+        } catch (e) {
+          // If it's not valid JSON, treat it as a newline-separated string
+          legacyOptions = String(q.options).trim().split('\n').map(x => x.trim()).filter(Boolean);
+        }
+      }
 
+      // Helper to try parsing answer JSON
+      let parsedAnswerJson: any = null;
       const answerRaw = q.answer ? String(q.answer).trim() : '';
+      if (answerRaw) {
+        try {
+          parsedAnswerJson = JSON.parse(answerRaw);
+        } catch (e) {
+          parsedAnswerJson = answerRaw; // Keep as raw string if not JSON
+        }
+      }
 
       if (qType === QuestionType.MULTIPLE_CHOICE || qType === QuestionType.SCENARIO || qType === QuestionType.IMAGE_BASED) {
-        options = [optA, optB, optC, optD].filter(Boolean);
-        // Answer is index (A=0, B=1, C=2, D=3 or numeric index)
-        const upperAns = answerRaw.toUpperCase();
-        if (upperAns === 'A' || upperAns === '0') correctAnswer = 0;
-        else if (upperAns === 'B' || upperAns === '1') correctAnswer = 1;
-        else if (upperAns === 'C' || upperAns === '2') correctAnswer = 2;
-        else if (upperAns === 'D' || upperAns === '3') correctAnswer = 3;
-        else {
-          // find option index
-          const foundIdx = options.findIndex((opt: string) => opt.toLowerCase() === answerRaw.toLowerCase());
-          correctAnswer = foundIdx !== -1 ? foundIdx : 0;
+        // Options format: [{"id": "A", "text": "Google Docs"}, ...] or ["Google Docs", ...]
+        if (Array.isArray(parsedOptionsJson)) {
+          options = parsedOptionsJson.map((o: any) => (o && typeof o === 'object') ? o.text : o);
+        } else {
+          options = legacyOptions;
+        }
+
+        // Answer format: "A" or 0
+        const ansVal = parsedAnswerJson !== null ? parsedAnswerJson : answerRaw;
+        if (typeof ansVal === 'number') {
+          correctAnswer = ansVal;
+        } else {
+          const sAns = String(ansVal).toUpperCase().trim();
+          if (Array.isArray(parsedOptionsJson)) {
+            const foundIdx = parsedOptionsJson.findIndex((o: any) => o && typeof o === 'object' && String(o.id).toUpperCase() === sAns);
+            if (foundIdx !== -1) {
+              correctAnswer = foundIdx;
+            }
+          }
+          if (correctAnswer === undefined) {
+            if (sAns.length === 1 && sAns >= 'A' && sAns <= 'Z') {
+              correctAnswer = sAns.charCodeAt(0) - 65;
+            } else if (/^\d+$/.test(sAns)) {
+              correctAnswer = parseInt(sAns, 10);
+            } else {
+              const foundIdx = options.findIndex((opt: string) => opt.toLowerCase() === sAns.toLowerCase());
+              correctAnswer = foundIdx !== -1 ? foundIdx : 0;
+            }
+          }
         }
       } 
       else if (qType === QuestionType.MULTIPLE_RESPONSE) {
-        options = [optA, optB, optC, optD].filter(Boolean);
-        // Answer is list of correct option indices (e.g., "A,C" or "0,2")
-        const parts = answerRaw.split(/[,;\s]+/).map(p => p.trim().toUpperCase()).filter(Boolean);
-        const ansIndices: number[] = [];
-        parts.forEach(p => {
-          if (p === 'A' || p === '0') ansIndices.push(0);
-          else if (p === 'B' || p === '1') ansIndices.push(1);
-          else if (p === 'C' || p === '2') ansIndices.push(2);
-          else if (p === 'D' || p === '3') ansIndices.push(3);
-          else {
-            const foundIdx = options.findIndex((opt: string) => opt.toLowerCase() === p.toLowerCase());
-            if (foundIdx !== -1) ansIndices.push(foundIdx);
+        // Options format: [{"id": "A", "text": "..."}] or string[]
+        if (Array.isArray(parsedOptionsJson)) {
+          options = parsedOptionsJson.map((o: any) => (o && typeof o === 'object') ? o.text : o);
+        } else {
+          options = legacyOptions;
+        }
+
+        // Answer format: ["A", "B"] or "A,B" or [0, 1]
+        const ansVal = parsedAnswerJson !== null ? parsedAnswerJson : answerRaw;
+        let ansArray: any[] = [];
+        if (Array.isArray(ansVal)) {
+          ansArray = ansVal;
+        } else if (typeof ansVal === 'string') {
+          ansArray = ansVal.split(/[,;\s]+/).map(p => p.trim()).filter(Boolean);
+        } else if (ansVal !== null && ansVal !== undefined) {
+          ansArray = [ansVal];
+        }
+
+        const indices: number[] = [];
+        ansArray.forEach(val => {
+          if (typeof val === 'number') {
+            indices.push(val);
+          } else {
+            const sVal = String(val).toUpperCase().trim();
+            if (Array.isArray(parsedOptionsJson)) {
+              const foundIdx = parsedOptionsJson.findIndex((o: any) => o && typeof o === 'object' && String(o.id).toUpperCase() === sVal);
+              if (foundIdx !== -1) {
+                indices.push(foundIdx);
+                return;
+              }
+            }
+            if (sVal.length === 1 && sVal >= 'A' && sVal <= 'Z') {
+              indices.push(sVal.charCodeAt(0) - 65);
+            } else if (/^\d+$/.test(sVal)) {
+              indices.push(parseInt(sVal, 10));
+            } else {
+              const foundIdx = options.findIndex((opt: string) => opt.toLowerCase() === sVal.toLowerCase());
+              if (foundIdx !== -1) indices.push(foundIdx);
+            }
           }
         });
-        correctAnswer = ansIndices.length > 0 ? ansIndices : [0];
+        correctAnswer = indices.length > 0 ? indices : [0];
       } 
       else if (qType === QuestionType.TRUE_FALSE) {
         options = ['Đúng', 'Sai'];
-        const val = answerRaw.toLowerCase();
-        correctAnswer = val === 'true' || val === 't' || val === 'đúng' || val === 'dung' || val === 'yes' || val === 'y' || val === '1';
+        const ansVal = parsedAnswerJson !== null ? parsedAnswerJson : answerRaw;
+        const sVal = String(ansVal).toLowerCase().trim();
+        correctAnswer = sVal === 'a' || sVal === 'true' || sVal === 't' || sVal === 'đúng' || sVal === 'dung' || sVal === 'yes' || sVal === 'y' || sVal === '1';
       } 
       else if (qType === QuestionType.MATCHING) {
-        // Option columns contain key|value pairs
-        const pairs = [optA, optB, optC, optD].filter(Boolean).map(p => {
-          const pts = p.split(/[|:-]+/).map(x => x.trim());
-          return { key: pts[0] || '', val: pts[1] || '' };
-        }).filter(p => p.key && p.val);
+        // Pairs format: [{"left": "CPU", "right": "Processor"}, ...]
+        let pairs: { left: string; right: string }[] = [];
+        const optVal = parsedOptionsJson || parsedAnswerJson;
+        if (Array.isArray(optVal)) {
+          pairs = optVal.map((item: any) => ({
+            left: item?.left || item?.key || '',
+            right: item?.right || item?.val || ''
+          })).filter(p => p.left && p.right);
+        }
 
-        const itemsA = pairs.map(p => p.key);
-        const itemsB = [...pairs.map(p => p.val)].sort(() => Math.random() - 0.5); // shuffle targets
+        // Fallback to legacy
+        if (pairs.length === 0) {
+          pairs = legacyOptions.map(p => {
+            const pts = p.split(/[|:-]+/).map(x => x.trim());
+            return { left: pts[0] || '', right: pts[1] || '' };
+          }).filter(p => p.left && p.right);
+        }
+
+        const itemsA = pairs.map(p => p.left);
+        const originalItemsB = pairs.map(p => p.right);
+        const itemsB = [...originalItemsB].sort(() => Math.random() - 0.5);
 
         options = { itemsA, itemsB };
-        // correctAnswer maps index of itemsA to index in itemsB
-        correctAnswer = itemsA.map((key, idx) => {
-          const originalVal = pairs[idx].val;
-          return itemsB.indexOf(originalVal);
+        correctAnswer = itemsA.map((_, iIdx) => {
+          const originalRight = originalItemsB[iIdx];
+          return itemsB.indexOf(originalRight);
         });
       } 
       else if (qType === QuestionType.DRAG_DROP) {
-        // Items are in opt columns, separated by commas or plain
-        const items = [optA, optB, optC, optD].filter(Boolean);
-        options = {
-          items,
-          textWithBlanks: String(q.question)
-        };
-        // correctAnswer is the items in correct order
-        correctAnswer = answerRaw.split(/[,;\s|]+/).map(x => x.trim()).filter(Boolean);
+        // Options format: {"items": ["...", "..."], "textWithBlanks": "..."}
+        let items: string[] = [];
+        let textWithBlanks = String(q.question || '');
+        if (parsedOptionsJson && typeof parsedOptionsJson === 'object' && !Array.isArray(parsedOptionsJson)) {
+          items = parsedOptionsJson.items || [];
+          if (parsedOptionsJson.textWithBlanks) {
+            textWithBlanks = parsedOptionsJson.textWithBlanks;
+          }
+        } else {
+          items = legacyOptions;
+        }
+
+        options = { items, textWithBlanks };
+
+        // Answer format: ["...", "..."]
+        let correctAnswers: string[] = [];
+        if (Array.isArray(parsedAnswerJson)) {
+          correctAnswers = parsedAnswerJson.map(String);
+        } else if (typeof parsedAnswerJson === 'string') {
+          correctAnswers = parsedAnswerJson.split(/[,;\s|]+/).map(x => x.trim()).filter(Boolean);
+        } else if (answerRaw) {
+          correctAnswers = answerRaw.split(/[,;\s|]+/).map(x => x.trim()).filter(Boolean);
+        }
+        correctAnswer = correctAnswers;
       } 
       else if (qType === QuestionType.FILL_BLANK) {
         options = {};
-        // correctAnswer is array of acceptable keywords for blanks
-        correctAnswer = answerRaw.split(/[,;|]+/).map(x => x.trim()).filter(Boolean);
+        let correctKeywords: string[] = [];
+        if (Array.isArray(parsedAnswerJson)) {
+          correctKeywords = parsedAnswerJson.map(String);
+        } else if (typeof parsedAnswerJson === 'string') {
+          correctKeywords = parsedAnswerJson.split(/[,;|]+/).map(x => x.trim()).filter(Boolean);
+        } else if (answerRaw) {
+          correctKeywords = answerRaw.split(/[,;|]+/).map(x => x.trim()).filter(Boolean);
+        }
+        correctAnswer = correctKeywords;
       } 
       else if (qType === QuestionType.DROPDOWN) {
-        // Dropdown options in columns, e.g. optA = "HTTP,FTP,SMTP"
-        const dropdownOptions = [optA, optB, optC, optD]
-          .filter(Boolean)
-          .map(col => col.split(/[,;|]+/).map(x => x.trim()));
-        
-        options = {
-          textWithDropdowns: String(q.question),
-          dropdownOptions
-        };
-        correctAnswer = answerRaw.split(/[,;|]+/).map(x => x.trim()).filter(Boolean);
+        // Options format: {"textWithDropdowns": "...", "dropdownOptions": [["...", "..."]]}
+        let textWithDropdowns = String(q.question || '');
+        let dropdownOptions: string[][] = [];
+        if (parsedOptionsJson && typeof parsedOptionsJson === 'object' && !Array.isArray(parsedOptionsJson)) {
+          dropdownOptions = parsedOptionsJson.dropdownOptions || [];
+          if (parsedOptionsJson.textWithDropdowns) {
+            textWithDropdowns = parsedOptionsJson.textWithDropdowns;
+          }
+        } else {
+          dropdownOptions = legacyOptions.map(col => col.split(/[,;|]+/).map(x => x.trim()));
+        }
+
+        options = { textWithDropdowns, dropdownOptions };
+
+        let correctVals: string[] = [];
+        if (Array.isArray(parsedAnswerJson)) {
+          correctVals = parsedAnswerJson.map(String);
+        } else if (typeof parsedAnswerJson === 'string') {
+          correctVals = parsedAnswerJson.split(/[,;|]+/).map(x => x.trim()).filter(Boolean);
+        } else if (answerRaw) {
+          correctVals = answerRaw.split(/[,;|]+/).map(x => x.trim()).filter(Boolean);
+        }
+        correctAnswer = correctVals;
       } 
       else if (qType === QuestionType.SEQUENCE) {
-        const items = [optA, optB, optC, optD].filter(Boolean);
-        options = items;
-        // Answer is order of original options, e.g., "A,C,B,D" or "0,2,1,3" or text order
-        const parts = answerRaw.split(/[,;\s]+/).map(p => p.trim().toUpperCase()).filter(Boolean);
-        let order: number[] = [];
-        parts.forEach(p => {
-          if (p === 'A' || p === '0') order.push(0);
-          else if (p === 'B' || p === '1') order.push(1);
-          else if (p === 'C' || p === '2') order.push(2);
-          else if (p === 'D' || p === '3') order.push(3);
-          else {
-            const idx = items.findIndex(item => item.toLowerCase() === p.toLowerCase());
-            if (idx !== -1) order.push(idx);
-          }
-        });
-        if (order.length !== items.length) {
-          // fall back to default sequence index [0, 1, 2, 3]
-          order = items.map((_, i) => i);
+        options = legacyOptions;
+        if (Array.isArray(parsedOptionsJson)) {
+          options = parsedOptionsJson.map((o: any) => (o && typeof o === 'object') ? o.text : o);
         }
-        correctAnswer = order;
+
+        // Answer format: ["step1", "step2"] in correct order
+        let orderedSteps: string[] = [];
+        if (Array.isArray(parsedAnswerJson)) {
+          orderedSteps = parsedAnswerJson.map(String);
+        }
+
+        let correctSeq: number[] = [];
+        if (orderedSteps.length > 0) {
+          correctSeq = orderedSteps.map(step => options.indexOf(step)).filter(idx => idx !== -1);
+        }
+
+        if (correctSeq.length !== options.length) {
+          // fallback to indices or letter keys
+          let parts: string[] = [];
+          if (Array.isArray(parsedAnswerJson)) {
+            parts = parsedAnswerJson.map(String);
+          } else if (answerRaw) {
+            parts = answerRaw.split(/[,;\s]+/).map(p => p.trim());
+          }
+
+          const order: number[] = [];
+          parts.forEach(p => {
+            const pUpper = p.toUpperCase();
+            if (pUpper.length === 1 && pUpper >= 'A' && pUpper <= 'Z') {
+              order.push(pUpper.charCodeAt(0) - 65);
+            } else if (/^\d+$/.test(pUpper)) {
+              order.push(parseInt(pUpper, 10));
+            } else {
+              const idx = options.findIndex((item: string) => item.toLowerCase() === p.toLowerCase());
+              if (idx !== -1) order.push(idx);
+            }
+          });
+          correctSeq = order;
+        }
+
+        if (correctSeq.length !== options.length) {
+          correctSeq = options.map((_: any, i: number) => i);
+        }
+        correctAnswer = correctSeq;
       }
       else if (qType === QuestionType.HOTSPOT) {
+        let hotspotVal = { x: 50, y: 50, radius: 10 };
+        if (parsedAnswerJson && typeof parsedAnswerJson === 'object' && !Array.isArray(parsedAnswerJson)) {
+          hotspotVal = {
+            x: parsedAnswerJson.x !== undefined ? Number(parsedAnswerJson.x) : 50,
+            y: parsedAnswerJson.y !== undefined ? Number(parsedAnswerJson.y) : 50,
+            radius: parsedAnswerJson.radius !== undefined ? Number(parsedAnswerJson.radius) : (parsedAnswerJson.r !== undefined ? Number(parsedAnswerJson.r) : 10)
+          };
+        } else if (answerRaw) {
+          const parts = answerRaw.split(/[,;|]+/).map(Number);
+          hotspotVal = {
+            x: !isNaN(parts[0]) ? parts[0] : 50,
+            y: !isNaN(parts[1]) ? parts[1] : 50,
+            radius: !isNaN(parts[2]) ? parts[2] : 10
+          };
+        }
         options = ['Vị trí hợp lệ'];
-        const parts = answerRaw.split(/[,;|]+/).map(Number);
-        correctAnswer = {
-          x: parts[0] !== undefined && !isNaN(parts[0]) ? parts[0] : 50,
-          y: parts[1] !== undefined && !isNaN(parts[1]) ? parts[1] : 50,
-          radius: parts[2] !== undefined && !isNaN(parts[2]) ? parts[2] : 10
-        };
+        correctAnswer = hotspotVal;
       }
 
       return {
@@ -549,6 +737,8 @@ export async function updateExamInGoogleSheet(exam: {
   time_limit: number;
   sheet_name: string;
   active?: boolean;
+  old_exam_id?: string;
+  old_sheet_name?: string;
 }) {
   try {
     const response = await apiFetch('updateExam', {}, {
@@ -559,6 +749,8 @@ export async function updateExamInGoogleSheet(exam: {
       time_limit: exam.time_limit,
       sheet_name: exam.sheet_name,
       active: exam.active !== undefined ? exam.active : true,
+      old_exam_id: exam.old_exam_id,
+      old_sheet_name: exam.old_sheet_name,
     });
     if (response && response.error === 'NOT_CONFIGURED') {
       console.warn('Google Sheets is not configured. Exam update kept in offline cache.');
@@ -570,109 +762,120 @@ export async function updateExamInGoogleSheet(exam: {
 }
 
 /**
- * Helper to map a local Question object into sheet option parameters
+ * Helper to map a local Question object into sheet option parameters dynamically
  */
 function serializeQuestionForSheet(question: Question, testCode: string) {
-  let optionA = '';
-  let optionB = '';
-  let optionC = '';
-  let optionD = '';
-  let answerStr = '';
-
   const qType = question.type;
+  let optionsJson = '';
+  let answerJson = '';
 
   if (qType === QuestionType.MULTIPLE_CHOICE || qType === QuestionType.SCENARIO || qType === QuestionType.IMAGE_BASED) {
-    const opts = question.options as string[] || [];
-    optionA = opts[0] || '';
-    optionB = opts[1] || '';
-    optionC = opts[2] || '';
-    optionD = opts[3] || '';
+    const opts = (Array.isArray(question.options) ? question.options : []) as string[];
+    // Convert to [{"id": "A", "text": "Google Docs"}, ...]
+    const mappedOpts = opts.map((opt, idx) => ({
+      id: String.fromCharCode(65 + idx),
+      text: opt || ''
+    }));
+    optionsJson = JSON.stringify(mappedOpts);
+
     const ansIdx = Number(question.correctAnswer);
-    answerStr = ansIdx === 0 ? 'A' : ansIdx === 1 ? 'B' : ansIdx === 2 ? 'C' : ansIdx === 3 ? 'D' : '';
+    const ansLetter = (ansIdx >= 0 && ansIdx < 26) ? String.fromCharCode(65 + ansIdx) : 'A';
+    answerJson = JSON.stringify(ansLetter);
   } 
   else if (qType === QuestionType.MULTIPLE_RESPONSE) {
-    const opts = question.options as string[] || [];
-    optionA = opts[0] || '';
-    optionB = opts[1] || '';
-    optionC = opts[2] || '';
-    optionD = opts[3] || '';
+    const opts = (Array.isArray(question.options) ? question.options : []) as string[];
+    const mappedOpts = opts.map((opt, idx) => ({
+      id: String.fromCharCode(65 + idx),
+      text: opt || ''
+    }));
+    optionsJson = JSON.stringify(mappedOpts);
+
     const ansIndices = question.correctAnswer as number[] || [];
-    answerStr = ansIndices.map(idx => idx === 0 ? 'A' : idx === 1 ? 'B' : idx === 2 ? 'C' : idx === 3 ? 'D' : '').filter(Boolean).join(',');
+    const ansLetters = ansIndices.map(idx => (idx >= 0 && idx < 26) ? String.fromCharCode(65 + idx) : '').filter(Boolean);
+    answerJson = JSON.stringify(ansLetters);
   } 
   else if (qType === QuestionType.TRUE_FALSE) {
-    optionA = 'Đúng';
-    optionB = 'Sai';
-    answerStr = question.correctAnswer ? 'A' : 'B';
+    const mappedOpts = [
+      { id: 'A', text: 'Đúng' },
+      { id: 'B', text: 'Sai' }
+    ];
+    optionsJson = JSON.stringify(mappedOpts);
+    
+    const isTrue = question.correctAnswer === true || String(question.correctAnswer).toLowerCase() === 'đúng' || String(question.correctAnswer).toLowerCase() === 'true';
+    answerJson = JSON.stringify(isTrue ? 'A' : 'B');
   } 
   else if (qType === QuestionType.MATCHING) {
     const opts = question.options as { itemsA: string[]; itemsB: string[] };
     const ansIndices = question.correctAnswer as number[] || [];
     
+    // List of correct pairs: [{"left": "CPU", "right": "Processor"}, ...]
+    const pairs: { left: string; right: string }[] = [];
     if (opts && opts.itemsA) {
-      optionA = opts.itemsA[0] ? `${opts.itemsA[0]}|${opts.itemsB[ansIndices[0]] !== undefined ? opts.itemsB[ansIndices[0]] : ''}` : '';
-      optionB = opts.itemsA[1] ? `${opts.itemsA[1]}|${opts.itemsB[ansIndices[1]] !== undefined ? opts.itemsB[ansIndices[1]] : ''}` : '';
-      optionC = opts.itemsA[2] ? `${opts.itemsA[2]}|${opts.itemsB[ansIndices[2]] !== undefined ? opts.itemsB[ansIndices[2]] : ''}` : '';
-      optionD = opts.itemsA[3] ? `${opts.itemsA[3]}|${opts.itemsB[ansIndices[3]] !== undefined ? opts.itemsB[ansIndices[3]] : ''}` : '';
+      opts.itemsA.forEach((itemA, idx) => {
+        const itemB = opts.itemsB[ansIndices[idx]] !== undefined ? opts.itemsB[ansIndices[idx]] : '';
+        pairs.push({ left: itemA, right: itemB });
+      });
     }
-    answerStr = 'A,B,C,D';
+    optionsJson = JSON.stringify(pairs);
+    answerJson = JSON.stringify(pairs);
   } 
   else if (qType === QuestionType.DRAG_DROP) {
     const opts = question.options as { items: string[]; textWithBlanks: string };
-    if (opts && opts.items) {
-      optionA = opts.items[0] || '';
-      optionB = opts.items[1] || '';
-      optionC = opts.items[2] || '';
-      optionD = opts.items[3] || '';
-    }
+    optionsJson = JSON.stringify({
+      items: opts?.items || [],
+      textWithBlanks: opts?.textWithBlanks || ''
+    });
     const correctItems = question.correctAnswer as string[] || [];
-    answerStr = correctItems.join(',');
+    answerJson = JSON.stringify(correctItems);
   } 
   else if (qType === QuestionType.FILL_BLANK) {
+    optionsJson = JSON.stringify({});
     const correctKeywords = question.correctAnswer as string[] || [];
-    answerStr = correctKeywords.join(',');
+    answerJson = JSON.stringify(correctKeywords);
   } 
   else if (qType === QuestionType.DROPDOWN) {
     const opts = question.options as { dropdownOptions: string[][]; textWithDropdowns: string };
-    if (opts && opts.dropdownOptions) {
-      optionA = opts.dropdownOptions[0] ? opts.dropdownOptions[0].join(',') : '';
-      optionB = opts.dropdownOptions[1] ? opts.dropdownOptions[1].join(',') : '';
-      optionC = opts.dropdownOptions[2] ? opts.dropdownOptions[2].join(',') : '';
-      optionD = opts.dropdownOptions[3] ? opts.dropdownOptions[3].join(',') : '';
-    }
+    optionsJson = JSON.stringify({
+      dropdownOptions: opts?.dropdownOptions || [],
+      textWithDropdowns: opts?.textWithDropdowns || ''
+    });
     const correctVals = question.correctAnswer as string[] || [];
-    answerStr = correctVals.join(',');
+    answerJson = JSON.stringify(correctVals);
   } 
   else if (qType === QuestionType.SEQUENCE) {
-    const opts = question.options as string[] || [];
-    optionA = opts[0] || '';
-    optionB = opts[1] || '';
-    optionC = opts[2] || '';
-    optionD = opts[3] || '';
+    const opts = (Array.isArray(question.options) ? question.options : []) as string[];
+    const mappedOpts = opts.map((opt, idx) => ({
+      id: String(idx + 1),
+      text: opt || ''
+    }));
+    optionsJson = JSON.stringify(mappedOpts);
+
     const correctIndices = question.correctAnswer as number[] || [];
-    answerStr = correctIndices.map(idx => idx === 0 ? 'A' : idx === 1 ? 'B' : idx === 2 ? 'C' : idx === 3 ? 'D' : '').filter(Boolean).join(',');
+    // The sequence steps in correct order
+    const orderedSteps = correctIndices.map(idx => opts[idx]).filter(Boolean);
+    answerJson = JSON.stringify(orderedSteps);
   }
   else if (qType === QuestionType.HOTSPOT) {
+    optionsJson = JSON.stringify(["Vị trí hợp lệ"]);
     const corr = question.correctAnswer as { x: number; y: number; radius?: number; r?: number } || { x: 50, y: 50, radius: 10 };
     const rVal = corr.radius !== undefined ? corr.radius : (corr.r !== undefined ? corr.r : 10);
-    answerStr = `${corr.x},${corr.y},${rVal}`;
-    optionA = 'Vị trí hợp lệ';
+    answerJson = JSON.stringify({ x: corr.x, y: corr.y, radius: rVal });
   }
 
-  return {
+  const serialized: Record<string, any> = {
     id: question.id,
     sheet_name: testCode,
     type: qType,
     category: question.category,
     question: question.content,
     image: question.imageUrl || '',
-    optionA,
-    optionB,
-    optionC,
-    optionD,
-    answer: answerStr,
+    options: optionsJson,
+    answer: answerJson,
     explanation: question.explanation,
     tip: question.tip || ''
   };
+
+  return serialized;
 }
 
 /**
@@ -733,6 +936,19 @@ export async function deleteRowInGoogleSheet(sheetName: string, keyColumn: strin
     return response;
   } catch (error) {
     console.warn('Error executing delete row in Google Sheet:', error);
+    throw error;
+  }
+}
+
+/**
+ * Run manual system database structure initialization in Google Sheets
+ */
+export async function initializeDatabaseOnGoogleSheet() {
+  try {
+    const response = await apiFetch('initializeDatabase', {}, {});
+    return response;
+  } catch (error) {
+    console.warn('Error initializing database in Google Sheet:', error);
     throw error;
   }
 }

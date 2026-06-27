@@ -8,12 +8,14 @@ import {
   updateExamInGoogleSheet,
   updateQuestionInGoogleSheet,
   saveQuestionsBatchToGoogleSheet,
-  deleteRowInGoogleSheet
+  deleteRowInGoogleSheet,
+  syncDatabaseFromGoogleSheets,
+  initializeDatabaseOnGoogleSheet
 } from '../lib/sheets';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Users, BookOpen, HelpCircle, BarChart3, Plus, Edit2, Trash2, Copy, Search, Lock, Unlock,
-  ShieldCheck, RefreshCw, Eye, Sparkles, CheckCircle2, ChevronRight, X, LayoutGrid, Info, ArrowLeft, Check
+  ShieldCheck, RefreshCw, Eye, Sparkles, CheckCircle2, ChevronRight, X, LayoutGrid, Info, ArrowLeft, Check, Settings
 } from 'lucide-react';
 import QuestionRenderer from './QuestionRenderer';
 
@@ -42,6 +44,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
   const [tests, setTests] = useState<Test[]>(() => getTests());
   const [showTestModal, setShowTestModal] = useState(false);
   const [editingTest, setEditingTest] = useState<Test | null>(null);
+  const [oldTCode, setOldTCode] = useState('');
   const [tCode, setTCode] = useState('');
   const [tLevel, setTLevel] = useState<1 | 2 | 3>(1);
   const [tTitle, setTTitle] = useState('');
@@ -97,6 +100,136 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
   const [editingParsedIdx, setEditingParsedIdx] = useState<number | null>(null);
   const [draftParsedQuestion, setDraftParsedQuestion] = useState<Question | null>(null);
   const [selectedPreviewParsedIdx, setSelectedPreviewParsedIdx] = useState<number>(0);
+
+  // Trạng thái cho Custom Confirmation Modal tránh bị chặn trong iframe sandbox
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {}
+  });
+
+  const triggerConfirm = (title: string, message: string, onConfirm: () => void) => {
+    setConfirmModal({
+      isOpen: true,
+      title,
+      message,
+      onConfirm: () => {
+        onConfirm();
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+      }
+    });
+  };
+
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false);
+  const [unlistedSheets, setUnlistedSheets] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('ic3_unlisted_sheets');
+      const parsed = stored ? JSON.parse(stored) : [];
+      const timer = setTimeout(() => {
+        setUnlistedSheets(parsed);
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [tests, isSyncing]);
+
+  const handleInitializeDatabase = () => {
+    triggerConfirm(
+      'Khởi Tạo Cơ Sở Dữ Liệu',
+      'Hành động này sẽ tạo cấu trúc bảng sạch (không kèm dữ liệu mẫu) trực tiếp trên Google Sheets liên kết nếu chưa tồn tại. Bạn có chắc chắn muốn thực hiện?',
+      async () => {
+        setIsInitializing(true);
+        try {
+          const res = await initializeDatabaseOnGoogleSheet();
+          if (res && res.success) {
+            alert('Khởi tạo cấu trúc cơ sở dữ liệu trên Google Sheets thành công!');
+            // After initializing, run sync to refresh local cache
+            const syncRes = await syncDatabaseFromGoogleSheets();
+            setTests(syncRes.tests);
+            setStudents(syncRes.students);
+            setQuestions(getQuestions());
+          } else {
+            alert(`Lỗi khởi tạo: ${res?.message || 'Không rõ nguyên nhân'}`);
+          }
+        } catch (err: any) {
+          alert(`Khởi tạo thất bại: ${err.message || err}`);
+        } finally {
+          setIsInitializing(false);
+        }
+      }
+    );
+  };
+
+  const handleAddUnlistedSheet = async (sheetName: string) => {
+    const cleanName = sheetName.replace(/_/g, ' ');
+    const derivedLevel = sheetName.includes('LV2') ? 2 : sheetName.includes('LV3') ? 3 : 1;
+    
+    const newTest: Test = {
+      id: `test_${Date.now()}`,
+      code: sheetName.toUpperCase(),
+      level: derivedLevel as 1 | 2 | 3,
+      title: `Đề thi phát hiện: ${cleanName}`,
+      description: `Được tự động phát hiện và đồng bộ từ Google Sheets.`,
+      category: IC3Category.COMPUTING_FUNDAMENTALS,
+      timeLimit: 15,
+      questionsCount: 0,
+    };
+
+    const allTests = getTests();
+    const isExist = allTests.some((t) => t.code.toUpperCase() === newTest.code);
+    if (isExist) {
+      alert('Đề thi này đã tồn tại trong hệ thống!');
+      return;
+    }
+
+    const updatedTests = [...allTests, newTest];
+    saveTests(updatedTests);
+    setTests(updatedTests);
+
+    try {
+      await updateExamInGoogleSheet({
+        exam_id: newTest.code,
+        level: newTest.level,
+        exam_name: newTest.title,
+        category: newTest.category,
+        time_limit: newTest.timeLimit,
+        sheet_name: sheetName,
+        active: true
+      });
+
+      const remaining = unlistedSheets.filter(s => s !== sheetName);
+      setUnlistedSheets(remaining);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('ic3_unlisted_sheets', JSON.stringify(remaining));
+      }
+      alert(`Đã thêm bộ đề ${sheetName} vào danh mục thành công!`);
+    } catch (err: any) {
+      alert(`Lỗi thêm bộ đề: ${err.message || err}`);
+    }
+  };
+
+  const handleSyncFromGoogleSheets = async () => {
+    setIsSyncing(true);
+    try {
+      const res = await syncDatabaseFromGoogleSheets();
+      setTests(res.tests);
+      setStudents(res.students);
+      setQuestions(getQuestions());
+      alert('Đồng bộ tất cả dữ liệu từ Google Sheets thành công!');
+    } catch (error: any) {
+      alert(`Đồng bộ thất bại: ${error.message || error}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   // --- HÀNH ĐỘNG HỌC SINH ---
   const handleOpenStudentModal = (student: Student | null = null) => {
@@ -233,62 +366,71 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
   };
 
   const handleDeleteStudent = (sId: string) => {
-    if (!window.confirm('Cảnh báo: Bạn có chắc chắn muốn xóa tài khoản học sinh này vĩnh viễn không?')) return;
-    const allStudents = getStudents();
-    const studentToDelete = allStudents.find((s) => s.id === sId);
-    const updated = allStudents.filter((s) => s.id !== sId);
-    saveStudents(updated);
-    setStudents(updated);
+    triggerConfirm(
+      'Xóa Tài Khoản Học Sinh',
+      'Cảnh báo: Bạn có chắc chắn muốn xóa tài khoản học sinh này vĩnh viễn không? Hành động này sẽ được đồng bộ hóa lên Google Sheets.',
+      () => {
+        const allStudents = getStudents();
+        const studentToDelete = allStudents.find((s) => s.id === sId);
+        const updated = allStudents.filter((s) => s.id !== sId);
+        saveStudents(updated);
+        setStudents(updated);
 
-    if (studentToDelete) {
-      deleteRowInGoogleSheet('students', 'student_id', studentToDelete.code);
-    }
+        if (studentToDelete) {
+          deleteRowInGoogleSheet('students', 'student_id', studentToDelete.code);
+        }
+      }
+    );
   };
 
   // Reset kết quả làm bài của học sinh (đưa điểm số, streak, lịch sử thi về 0)
   const handleResetStudentResults = (sId: string) => {
-    if (!window.confirm('Xác nhận: Bạn có chắc chắn muốn reset toàn bộ điểm trung bình, lịch sử thi, số ngày streak và huy hiệu của học sinh này không?')) return;
-    
-    // Cập nhật Student
-    const allStudents = getStudents();
-    const updatedSt = allStudents.map((s) => {
-      if (s.id === sId) {
-        return {
-          ...s,
-          badges: [],
-          completedTests: [],
-          averageScore: 0,
-          totalQuestionsSolved: 0,
-          correctQuestionsSolved: 0,
-          streak: 1,
-        };
+    triggerConfirm(
+      'Reset Kết Quả Học Sinh',
+      'Xác nhận: Bạn có chắc chắn muốn reset toàn bộ điểm trung bình, lịch sử thi, số ngày streak và huy hiệu của học sinh này không?',
+      () => {
+        // Cập nhật Student
+        const allStudents = getStudents();
+        const updatedSt = allStudents.map((s) => {
+          if (s.id === sId) {
+            return {
+              ...s,
+              badges: [],
+              completedTests: [],
+              averageScore: 0,
+              totalQuestionsSolved: 0,
+              correctQuestionsSolved: 0,
+              streak: 1,
+            };
+          }
+          return s;
+        });
+        saveStudents(updatedSt);
+        setStudents(updatedSt);
+
+        // Xóa kết quả thi trong TestResults
+        const allResults = getTestResults();
+        const updatedRes = allResults.filter((r) => r.studentId !== sId);
+        saveTestResults(updatedRes);
+
+        const resetSt = updatedSt.find(s => s.id === sId);
+        if (resetSt) {
+          updateStudentInGoogleSheet({
+            student_id: resetSt.code,
+            fullname: resetSt.name,
+            school: resetSt.school || '',
+            class: resetSt.class,
+            password: resetSt.password,
+            level: String(resetSt.currentLevel),
+            status: resetSt.isLocked ? 'locked' : 'active'
+          });
+          // Delete their exam results from Google Sheets
+          deleteRowInGoogleSheet('results', 'student_id', resetSt.code);
+        }
+
+        alert('Đã reset toàn bộ kết quả của học sinh thành công!');
       }
-      return s;
-    });
-    saveStudents(updatedSt);
-    setStudents(updatedSt);
-
-    // Xóa kết quả thi trong TestResults
-    const allResults = getTestResults();
-    const updatedRes = allResults.filter((r) => r.studentId !== sId);
-    saveTestResults(updatedRes);
-
-    const resetSt = updatedSt.find(s => s.id === sId);
-    if (resetSt) {
-      updateStudentInGoogleSheet({
-        student_id: resetSt.code,
-        fullname: resetSt.name,
-        school: resetSt.school || '',
-        class: resetSt.class,
-        password: resetSt.password,
-        level: String(resetSt.currentLevel),
-        status: resetSt.isLocked ? 'locked' : 'active'
-      });
-      // Delete their exam results from Google Sheets
-      deleteRowInGoogleSheet('results', 'student_id', resetSt.code);
-    }
-
-    alert('Đã reset toàn bộ kết quả của học sinh thành công!');
+    );
   };
 
 
@@ -297,6 +439,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
     if (test) {
       setEditingTest(test);
       setTCode(test.code);
+      setOldTCode(test.code);
       setTLevel(test.level);
       setTTitle(test.title);
       setTDesc(test.description);
@@ -305,6 +448,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
     } else {
       setEditingTest(null);
       setTCode('');
+      setOldTCode('');
       setTLevel(1);
       setTTitle('');
       setTDesc('');
@@ -325,11 +469,14 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
 
     if (editingTest) {
       // Sửa đề
+      const newCode = tCode.trim().toUpperCase();
+      const isCodeChanged = newCode !== oldTCode;
+
       const updated = allTests.map((t) => {
         if (t.id === editingTest.id) {
           return {
             ...t,
-            code: tCode.trim().toUpperCase(),
+            code: newCode,
             level: tLevel,
             title: tTitle.trim(),
             description: tDesc.trim(),
@@ -351,8 +498,22 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
           category: updatedTest.category,
           time_limit: updatedTest.timeLimit,
           sheet_name: updatedTest.code,
-          active: true
+          active: true,
+          old_exam_id: isCodeChanged ? oldTCode : undefined,
+          old_sheet_name: isCodeChanged ? oldTCode : undefined
         });
+
+        // If renamed, update all questions belonging to oldTCode to the newCode
+        if (isCodeChanged) {
+          const updatedQuestions = questions.map((q) => {
+            if (q.testId === oldTCode) {
+              return { ...q, testId: newCode };
+            }
+            return q;
+          });
+          saveQuestions(updatedQuestions);
+          setQuestions(updatedQuestions);
+        }
       }
     } else {
       // Thêm đề
@@ -392,17 +553,21 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
   };
 
   const handleDeleteTest = (testCode: string) => {
-    if (!window.confirm(`Xác nhận: Bạn có muốn xóa đề thi ${testCode} và tất cả các câu hỏi thuộc đề này không?`)) return;
-    
-    const allTests = getTests().filter((t) => t.code !== testCode);
-    saveTests(allTests);
-    setTests(allTests);
+    triggerConfirm(
+      'Xóa Đề Thi',
+      `Xác nhận: Bạn có muốn xóa đề thi ${testCode} và tất cả các câu hỏi thuộc đề này không? Hành động này sẽ được đồng bộ hóa lên Google Sheets.`,
+      () => {
+        const allTests = getTests().filter((t) => t.code !== testCode);
+        saveTests(allTests);
+        setTests(allTests);
 
-    const allQuestions = getQuestions().filter((q) => q.testId !== testCode);
-    saveQuestions(allQuestions);
-    setQuestions(allQuestions);
+        const allQuestions = getQuestions().filter((q) => q.testId !== testCode);
+        saveQuestions(allQuestions);
+        setQuestions(allQuestions);
 
-    deleteRowInGoogleSheet('exam_catalog', 'exam_id', testCode);
+        deleteRowInGoogleSheet('exam_catalog', 'exam_id', testCode);
+      }
+    );
   };
 
   // Sao chép đề thi (Duplicate)
@@ -564,7 +729,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
 
     // Find the first option line
     // Option markers: a. b. c. d. or A. B. C. D. or a) b) c) d) or A) B) C) D) or 1. 2. 3. 4.
-    const optionPrefixRegex = /^\s*([a-d1-4])\s*[\.\)-:\s]\s*/i;
+    const optionPrefixRegex = /^\s*([a-z]|[0-9]+)\s*[\.\)-:\s]\s*/i;
     
     let firstOptionIdx = -1;
     for (let i = 0; i < lines.length; i++) {
@@ -624,7 +789,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
 
     // We can also have an answer block like "Answer: B" or "Correct Answer: B" at the end
     let bottomCorrectLetter = '';
-    const bottomAnsMatch = text.match(/(?:answer|correct\s*answer|right\s*answer|đáp\s*án\s*đúng)\s*:\s*([a-d1-4])/i);
+    const bottomAnsMatch = text.match(/(?:answer|correct\s*answer|right\s*answer|đáp\s*án\s*đúng)\s*:\s*([a-z]|[0-9]+)/i);
     if (bottomAnsMatch) {
       bottomCorrectLetter = bottomAnsMatch[1].toUpperCase();
     }
@@ -640,7 +805,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
       let originalLetter = '';
 
       // Extract letter prefix if present
-      const prefixMatch = line.match(/^\s*([a-d1-4])\s*[\.\)-:\s]\s*(.*)$/i);
+      const prefixMatch = line.match(/^\s*([a-z]|[0-9]+)\s*[\.\)-:\s]\s*(.*)$/i);
       if (prefixMatch) {
         originalLetter = prefixMatch[1].toUpperCase();
         optionText = prefixMatch[2].trim();
@@ -732,6 +897,10 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
     setQType(parsed.type);
     setQCorrectAnsText(parsed.correctAnswer);
     setParsingError(parsed.error || null);
+
+    if (parsed.type === QuestionType.MULTIPLE_CHOICE || parsed.type === QuestionType.MULTIPLE_RESPONSE || parsed.type === QuestionType.IMAGE_BASED || parsed.type === QuestionType.SCENARIO) {
+      setMcqOpts(parsed.options);
+    }
 
     // Auto preview
     setTimeout(() => {
@@ -878,6 +1047,10 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
       setQCorrectAnsText(parsed.correctAnswer);
       setParsingError(parsed.error || null);
 
+      if (parsed.type === QuestionType.MULTIPLE_CHOICE || parsed.type === QuestionType.MULTIPLE_RESPONSE || parsed.type === QuestionType.IMAGE_BASED || parsed.type === QuestionType.SCENARIO) {
+        setMcqOpts(parsed.options);
+      }
+
       // Auto preview
       setTimeout(() => {
         const qObj = {
@@ -935,7 +1108,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
       let optionText = line;
 
       // Extract letter prefix if present
-      const prefixMatch = line.match(/^\s*([a-d1-4])\s*[\.\)-:\s]\s*(.*)$/i);
+      const prefixMatch = line.match(/^\s*([a-z]|[0-9]+)\s*[\.\)-:\s]\s*(.*)$/i);
       if (prefixMatch) {
         optionText = prefixMatch[2].trim();
       }
@@ -1013,7 +1186,9 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
         setQCorrectAnsText(ansText);
         
         const extendedOpts = [...opts];
-        while (extendedOpts.length < 4) extendedOpts.push('');
+        if (extendedOpts.length === 0) {
+          extendedOpts.push('', '', '', '');
+        }
         setMcqOpts(extendedOpts);
       } else if (q.type === QuestionType.TRUE_FALSE) {
         setQOptionsText('');
@@ -1068,6 +1243,9 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
       }
     } else {
       setEditingQuestion(null);
+      // Gán mã đề thi tự động nếu chưa có hoặc dùng bộ đề đang lọc
+      const currentTestCode = qSearchTest !== 'All' ? qSearchTest : (tests.length > 0 ? tests[0].code : '');
+      setQTestCode(currentTestCode);
       setQType(QuestionType.MULTIPLE_CHOICE);
       setQCategory(IC3Category.COMPUTING_FUNDAMENTALS);
       setQContent('');
@@ -1091,8 +1269,17 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
   };
 
   // Parse các trường của câu hỏi trước khi Lưu hoặc Preview
-  const buildQuestionObjectFromForm = (): Question | null => {
-    if (!qContent || !qTestCode) {
+  const buildQuestionObjectFromForm = (showErrorAlerts: boolean = false): Question | null => {
+    if (!qContent.trim()) {
+      if (showErrorAlerts) {
+        alert('Vui lòng nhập "Nội Dung Đề Bài" trước khi lưu!');
+      }
+      return null;
+    }
+    if (!qTestCode) {
+      if (showErrorAlerts) {
+        alert('Vui lòng chọn hoặc tạo ít nhất một bộ đề thi để gán câu hỏi này!');
+      }
       return null;
     }
 
@@ -1101,7 +1288,12 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
 
     try {
       if (qType === QuestionType.MULTIPLE_CHOICE || qType === QuestionType.IMAGE_BASED || qType === QuestionType.SCENARIO) {
-        parsedOptions = qOptionsText.split('\n').map((o) => o.trim()).filter((o) => o);
+        const emptyIndex = mcqOpts.findIndex(o => !o.trim());
+        if (emptyIndex !== -1 && showErrorAlerts) {
+          alert(`Lựa chọn thứ ${emptyIndex + 1} (${String.fromCharCode(65 + emptyIndex)}) đang bị trống. Vui lòng điền đầy đủ hoặc xóa đáp án này.`);
+          return null;
+        }
+        parsedOptions = mcqOpts.map((o) => o.trim()).filter(Boolean);
         const ans = qCorrectAnsText.trim();
         let parsedIdx = parseInt(ans);
         if (isNaN(parsedIdx)) {
@@ -1116,8 +1308,18 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
           }
         }
         parsedCorrectAnswer = isNaN(parsedIdx) ? 0 : parsedIdx;
+        
+        if (showErrorAlerts && (parsedCorrectAnswer === null || parsedCorrectAnswer === undefined || parsedCorrectAnswer < 0 || parsedCorrectAnswer >= parsedOptions.length)) {
+          alert('Vui lòng chọn đáp án đúng bằng cách click vào vòng tròn/ký hiệu chữ cái ở trước đáp án đúng!');
+          return null;
+        }
       } else if (qType === QuestionType.MULTIPLE_RESPONSE) {
-        parsedOptions = qOptionsText.split('\n').map((o) => o.trim()).filter((o) => o);
+        const emptyIndex = mcqOpts.findIndex(o => !o.trim());
+        if (emptyIndex !== -1 && showErrorAlerts) {
+          alert(`Lựa chọn thứ ${emptyIndex + 1} (${String.fromCharCode(65 + emptyIndex)}) đang bị trống. Vui lòng điền đầy đủ hoặc xóa đáp án này.`);
+          return null;
+        }
+        parsedOptions = mcqOpts.map((o) => o.trim()).filter(Boolean);
         const parts = qCorrectAnsText.split(',').map((s) => s.trim()).filter(Boolean);
         parsedCorrectAnswer = parts.map((part) => {
           let parsedIdx = parseInt(part);
@@ -1134,6 +1336,11 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
           }
           return parsedIdx;
         }).filter((idx) => !isNaN(idx) && idx >= 0 && idx < parsedOptions.length);
+
+        if (showErrorAlerts && parsedCorrectAnswer.length === 0) {
+          alert('Vui lòng chọn ít nhất một đáp án đúng bằng cách click vào ô vuông/ký hiệu chữ cái ở trước các đáp án đúng!');
+          return null;
+        }
       } else if (qType === QuestionType.TRUE_FALSE) {
         parsedOptions = ['Đúng', 'Sai'];
         parsedCorrectAnswer = qCorrectAnsText.trim().toLowerCase() === 'đúng' || qCorrectAnsText.trim() === 'true';
@@ -1200,7 +1407,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
   };
 
   const handleSaveQuestion = () => {
-    const qObj = buildQuestionObjectFromForm();
+    const qObj = buildQuestionObjectFromForm(true);
     if (!qObj) return;
 
     const allQuestions = getQuestions();
@@ -1229,41 +1436,46 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
     setShowQuestionModal(false);
   };
 
-  const handleDeleteQuestion = async (qId: string) => {
-    if (!window.confirm('Bạn có chắc muốn xóa câu hỏi này không?')) return;
-    const allQuestions = getQuestions();
-    const qToDelete = allQuestions.find((q) => q.id === qId);
-    
-    if (!qToDelete) {
-      alert('Lỗi: Không tìm thấy câu hỏi để xóa.');
-      return;
-    }
+  const handleDeleteQuestion = (qId: string) => {
+    triggerConfirm(
+      'Xóa Câu Hỏi',
+      'Bạn có chắc chắn muốn xóa câu hỏi này không? Hành động này sẽ được đồng bộ hóa lên Google Sheets.',
+      async () => {
+        const allQuestions = getQuestions();
+        const qToDelete = allQuestions.find((q) => q.id === qId);
+        
+        if (!qToDelete) {
+          alert('Lỗi: Không tìm thấy câu hỏi để xóa.');
+          return;
+        }
 
-    try {
-      // Try to delete from Google Sheets first
-      const res = await deleteRowInGoogleSheet(qToDelete.testId, 'id', qId);
-      if (res && res.error) {
-        alert(`Lỗi khi xóa trên Google Sheets: ${res.message || JSON.stringify(res)}`);
-        return;
+        try {
+          // Try to delete from Google Sheets first
+          const res = await deleteRowInGoogleSheet(qToDelete.testId, 'id', qId);
+          if (res && res.error) {
+            alert(`Lỗi khi xóa trên Google Sheets: ${res.message || JSON.stringify(res)}`);
+            return;
+          }
+
+          const updated = allQuestions.filter((q) => q.id !== qId);
+          saveQuestions(updated);
+          setQuestions(updated);
+
+          // Cập nhật câu hỏi count
+          const allTests = getTests();
+          const updatedTests = allTests.map((t) => {
+            const count = updated.filter((q) => q.testId === t.code).length;
+            return { ...t, questionsCount: count };
+          });
+          saveTests(updatedTests);
+          setTests(updatedTests);
+
+          alert('Đã xóa câu hỏi thành công!');
+        } catch (error: any) {
+          alert(`Lỗi chi tiết khi xóa câu hỏi: ${error.message || error}`);
+        }
       }
-
-      const updated = allQuestions.filter((q) => q.id !== qId);
-      saveQuestions(updated);
-      setQuestions(updated);
-
-      // Cập nhật câu hỏi count
-      const allTests = getTests();
-      const updatedTests = allTests.map((t) => {
-        const count = updated.filter((q) => q.testId === t.code).length;
-        return { ...t, questionsCount: count };
-      });
-      saveTests(updatedTests);
-      setTests(updatedTests);
-
-      alert('Đã xóa câu hỏi thành công!');
-    } catch (error: any) {
-      alert(`Lỗi chi tiết khi xóa câu hỏi: ${error.message || error}`);
-    }
+    );
   };
 
 
@@ -1337,43 +1549,64 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
 
       {/* SƯỜN TABS ĐIỀU HƯỚNG QUẢN TRỊ */}
       <div className="border-b bg-white shadow-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-6 flex overflow-x-auto">
-          <button
-            onClick={() => setActiveTab('students')}
-            className={`py-4 px-6 text-sm font-black border-b-4 flex items-center gap-2 transition-all whitespace-nowrap ${
-              activeTab === 'students' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-            id="admin_tab_students"
-          >
-            <Users className="w-4.5 h-4.5" /> Quản Lý Học Sinh
-          </button>
-          <button
-            onClick={() => setActiveTab('tests')}
-            className={`py-4 px-6 text-sm font-black border-b-4 flex items-center gap-2 transition-all whitespace-nowrap ${
-              activeTab === 'tests' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-            id="admin_tab_tests"
-          >
-            <BookOpen className="w-4.5 h-4.5" /> Quản Lý Đề Thi
-          </button>
-          <button
-            onClick={() => setActiveTab('questions')}
-            className={`py-4 px-6 text-sm font-black border-b-4 flex items-center gap-2 transition-all whitespace-nowrap ${
-              activeTab === 'questions' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-            id="admin_tab_questions"
-          >
-            <HelpCircle className="w-4.5 h-4.5" /> Quản Lý Câu Hỏi
-          </button>
-          <button
-            onClick={() => setActiveTab('reports')}
-            className={`py-4 px-6 text-sm font-black border-b-4 flex items-center gap-2 transition-all whitespace-nowrap ${
-              activeTab === 'reports' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-            id="admin_tab_reports"
-          >
-            <BarChart3 className="w-4.5 h-4.5" /> Thống Kê Báo Cáo
-          </button>
+        <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4 py-2 md:py-0">
+          <div className="flex overflow-x-auto">
+            <button
+              onClick={() => setActiveTab('students')}
+              className={`py-4 px-6 text-sm font-black border-b-4 flex items-center gap-2 transition-all whitespace-nowrap ${
+                activeTab === 'students' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+              id="admin_tab_students"
+            >
+              <Users className="w-4.5 h-4.5" /> Quản Lý Học Sinh
+            </button>
+            <button
+              onClick={() => setActiveTab('tests')}
+              className={`py-4 px-6 text-sm font-black border-b-4 flex items-center gap-2 transition-all whitespace-nowrap ${
+                activeTab === 'tests' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+              id="admin_tab_tests"
+            >
+              <BookOpen className="w-4.5 h-4.5" /> Quản Lý Đề Thi
+            </button>
+            <button
+              onClick={() => setActiveTab('questions')}
+              className={`py-4 px-6 text-sm font-black border-b-4 flex items-center gap-2 transition-all whitespace-nowrap ${
+                activeTab === 'questions' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+              id="admin_tab_questions"
+            >
+              <HelpCircle className="w-4.5 h-4.5" /> Quản Lý Câu Hỏi
+            </button>
+            <button
+              onClick={() => setActiveTab('reports')}
+              className={`py-4 px-6 text-sm font-black border-b-4 flex items-center gap-2 transition-all whitespace-nowrap ${
+                activeTab === 'reports' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+              id="admin_tab_reports"
+            >
+              <BarChart3 className="w-4.5 h-4.5" /> Thống Kê Báo Cáo
+            </button>
+          </div>
+          <div className="flex items-center gap-2 pb-2 md:pb-0">
+            <button
+              onClick={handleInitializeDatabase}
+              disabled={isSyncing || isInitializing}
+              className={`px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-extrabold rounded-xl text-xs flex items-center gap-1.5 border border-slate-200 transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed`}
+              title="Khởi tạo cấu trúc các bảng trên Google Sheets (không có dữ liệu mẫu)"
+            >
+              <Settings className={`w-3.5 h-3.5 ${isInitializing ? 'animate-spin' : ''}`} />
+              {isInitializing ? 'Đang khởi tạo...' : 'Khởi tạo CSDL'}
+            </button>
+            <button
+              onClick={handleSyncFromGoogleSheets}
+              disabled={isSyncing}
+              className={`px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-extrabold rounded-xl text-xs flex items-center gap-1.5 border border-indigo-150 transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed`}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+              {isSyncing ? 'Đang đồng bộ...' : 'Đồng bộ từ Google Sheets'}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1512,6 +1745,31 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
               animate={{ opacity: 1, y: 0 }}
               className="space-y-6"
             >
+              {unlistedSheets.length > 0 && (
+                <div className="bg-amber-50 border-2 border-amber-200 rounded-3xl p-5 shadow-sm space-y-3 animate-fadeIn">
+                  <div className="flex items-center gap-2 text-amber-800">
+                    <Info className="w-5 h-5 text-amber-600 animate-pulse" />
+                    <span className="font-extrabold text-sm">Phát hiện bộ đề mới trên Google Sheets</span>
+                  </div>
+                  <p className="text-xs text-amber-700">
+                    Hệ thống phát hiện các tab bảng tính câu hỏi chưa được đăng ký vào Danh mục đề thi. Nhấp vào nút bên dưới để tự động thêm nhanh bộ đề thi này vào hệ thống mà không cần nhập lại!
+                  </p>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {unlistedSheets.map((sheet) => (
+                      <div key={sheet} className="bg-white border border-amber-200 px-3 py-1.5 rounded-xl flex items-center gap-3 text-xs shadow-sm font-bold text-slate-700">
+                        <span>📄 {sheet}</span>
+                        <button
+                          onClick={() => handleAddUnlistedSheet(sheet)}
+                          className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white font-extrabold rounded-lg text-[10px] shadow-sm transition-all cursor-pointer"
+                        >
+                          Đồng bộ đề thi
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="flex justify-end bg-white p-4 rounded-3xl border shadow-sm">
                 <button
                   onClick={() => handleOpenTestModal()}
@@ -1903,7 +2161,6 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                   <input
                     type="text"
                     value={tCode}
-                    disabled={editingTest !== null}
                     onChange={(e) => setTCode(e.target.value)}
                     placeholder="Ví dụ: OT3_LV1"
                     className="w-full p-2.5 border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500 bg-slate-50 font-bold"
@@ -2143,9 +2400,14 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                   )}
                 
                 {(qType === QuestionType.MULTIPLE_CHOICE || qType === QuestionType.MULTIPLE_RESPONSE || qType === QuestionType.IMAGE_BASED || qType === QuestionType.SCENARIO) && (
-                  <div className="space-y-3 p-4 bg-slate-50 border border-slate-200 rounded-2xl shadow-sm">
-                    <div className="flex justify-between items-center">
-                      <label className="block text-[10px] font-black text-indigo-700 uppercase">Cấu hình các lựa chọn trực quan</label>
+                  <div className="space-y-4 p-5 bg-slate-50 border border-slate-200 rounded-3xl shadow-sm">
+                    <div className="flex justify-between items-center pb-2 border-b border-slate-200">
+                      <div>
+                        <label className="block text-xs font-black text-indigo-700 uppercase">Cấu hình các lựa chọn</label>
+                        <span className="text-[10px] text-slate-400 font-bold block">
+                          Hãy tick vào nút {qType === QuestionType.MULTIPLE_RESPONSE ? 'ô vuông' : 'hình tròn'} ở trước đáp án để đánh dấu đáp án đúng.
+                        </span>
+                      </div>
                       <button
                         type="button"
                         onClick={() => {
@@ -2153,13 +2415,13 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                           setMcqOpts(newOpts);
                           setQOptionsText(newOpts.filter(Boolean).join('\n'));
                         }}
-                        className="text-[10px] py-1 px-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-lg shadow transition-all flex items-center gap-1"
+                        className="text-[10px] py-1.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-lg shadow-sm hover:shadow-md transition-all flex items-center gap-1"
                       >
-                        + Thêm Lựa Chọn
+                        + Thêm Đáp Án
                       </button>
                     </div>
 
-                    <div className="space-y-2">
+                    <div className="space-y-3">
                       {mcqOpts.map((opt, idx) => {
                         const letter = String.fromCharCode(65 + idx);
                         const isMultipleResponse = qType === QuestionType.MULTIPLE_RESPONSE;
@@ -2173,7 +2435,12 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                         }
 
                         return (
-                          <div key={idx} className="flex items-center gap-2 bg-white p-2 border border-slate-200 rounded-xl shadow-sm hover:border-slate-300 transition-all">
+                          <div key={idx} className={`flex items-center gap-3 p-3 border rounded-2xl shadow-sm transition-all hover:shadow-md ${
+                            isSelected 
+                              ? 'bg-emerald-50/70 border-emerald-300 ring-1 ring-emerald-300' 
+                              : 'bg-white border-slate-200 hover:border-slate-300'
+                          }`}>
+                            {/* Nút chọn đáp án đúng */}
                             <button
                               type="button"
                               onClick={() => {
@@ -2191,16 +2458,30 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                                 }
                                 setTimeout(() => handlePreviewQuestion(), 50);
                               }}
-                              className={`w-7 h-7 rounded-lg flex items-center justify-center border-2 transition-all font-black text-xs ${
-                                isSelected
-                                  ? 'bg-emerald-600 border-emerald-600 text-white shadow'
-                                  : 'bg-slate-50 border-slate-200 text-slate-500 hover:border-slate-350'
-                              }`}
+                              className="flex items-center gap-2 flex-shrink-0 group cursor-pointer"
                               title={isMultipleResponse ? "Chọn làm một trong các đáp án đúng" : "Chọn làm đáp án đúng duy nhất"}
                             >
-                              {isSelected ? <Check className="w-3.5 h-3.5" /> : letter}
+                              <div className={`w-5.5 h-5.5 flex items-center justify-center border-2 transition-all ${
+                                isMultipleResponse ? 'rounded-lg' : 'rounded-full'
+                              } ${
+                                isSelected 
+                                  ? 'border-emerald-600 bg-emerald-600 text-white' 
+                                  : 'border-slate-300 bg-slate-50 group-hover:border-indigo-400'
+                              }`}>
+                                {isSelected ? (
+                                  <Check className="w-3.5 h-3.5 stroke-[3]" />
+                                ) : (
+                                  <div className={`w-2 h-2 ${isMultipleResponse ? 'rounded-[2px]' : 'rounded-full'} bg-transparent`} />
+                                )}
+                              </div>
+                              <span className={`text-xs font-black w-4 text-center ${
+                                isSelected ? 'text-emerald-800' : 'text-slate-500'
+                              }`}>
+                                {letter}
+                              </span>
                             </button>
 
+                            {/* Ô nhập nội dung */}
                             <input
                               type="text"
                               value={opt}
@@ -2216,9 +2497,14 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                                   ? "Nhập đường dẫn ảnh hoặc mô tả..."
                                   : `Nội dung lựa chọn ${letter}...`
                               }
-                              className="flex-1 p-2 border border-slate-100 rounded-lg text-xs font-bold bg-slate-50/50 focus:bg-white focus:ring-1 focus:ring-indigo-500 outline-none transition-all"
+                              className={`flex-1 p-2 border rounded-xl text-xs font-bold outline-none transition-all ${
+                                isSelected 
+                                  ? 'bg-white border-emerald-200 focus:ring-1 focus:ring-emerald-400 text-emerald-900' 
+                                  : 'bg-slate-50/50 border-slate-100 focus:bg-white focus:ring-1 focus:ring-indigo-500 text-slate-800'
+                              }`}
                             />
 
+                            {/* Nút xóa lựa chọn */}
                             {mcqOpts.length > 1 && (
                               <button
                                 type="button"
@@ -2243,7 +2529,8 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                                   }
                                   setTimeout(() => handlePreviewQuestion(), 50);
                                 }}
-                                className="w-7 h-7 rounded-lg border bg-rose-50 hover:bg-rose-100 text-rose-500 flex items-center justify-center text-sm font-bold shadow-sm transition-all"
+                                className="w-7 h-7 rounded-lg border border-rose-100 bg-rose-50 hover:bg-rose-100 hover:border-rose-200 text-rose-500 flex items-center justify-center text-sm font-bold shadow-sm transition-all cursor-pointer"
+                                title="Xóa đáp án này"
                               >
                                 &times;
                               </button>
@@ -2716,22 +3003,18 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                   </div>
                 )}
 
-                  <input
-                    type="text"
-                    value={qCorrectAnsText}
-                    onChange={(e) => setQCorrectAnsText(e.target.value)}
-                    placeholder="Gõ đáp án đúng..."
-                    className="w-full p-2.5 border border-slate-200 rounded-xl text-xs bg-slate-50 font-mono outline-none"
-                  />
-                  
-                  <span className="block text-[9px] text-slate-400 font-medium mt-1">
-                    {qType === QuestionType.MULTIPLE_CHOICE || qType === QuestionType.IMAGE_BASED || qType === QuestionType.SCENARIO
-                      ? "* Chỉ số đáp án đúng (0 cho A, 1 cho B, 2 cho C, 3 cho D... hoặc gõ hẳn chữ/letter)"
-                      : qType === QuestionType.MULTIPLE_RESPONSE
-                        ? "* Các chỉ số đáp án đúng cách nhau bằng dấu phẩy (ví dụ: 0,2)"
-                        : ""
-                    }
-                  </span>
+                {!['multiple_choice', 'multiple_response', 'image_based', 'scenario', 'true_false', 'matching', 'sequence', 'drag_drop', 'dropdown', 'fill_blank'].includes(qType) && (
+                  <div className="space-y-1">
+                    <label className="block text-[10px] font-black text-slate-500 uppercase">Đáp án đúng cấu hình:</label>
+                    <input
+                      type="text"
+                      value={qCorrectAnsText}
+                      onChange={(e) => setQCorrectAnsText(e.target.value)}
+                      placeholder="Gõ đáp án đúng..."
+                      className="w-full p-2.5 border border-slate-200 rounded-xl text-xs bg-slate-50 font-mono outline-none"
+                    />
+                  </div>
+                )}
                 </div>
 
                 <div className="flex gap-2">
@@ -3363,6 +3646,33 @@ Hãy nhấp vào biểu tượng Save trên thanh công cụ.`);
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* CUSTOM CONFIRMATION MODAL */}
+      {confirmModal.isOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-[9999] animate-fadeIn">
+          <div className="bg-white rounded-3xl p-6 md:p-8 max-w-sm w-full border border-slate-100 shadow-2xl relative animate-scaleIn">
+            <h4 className="font-black text-slate-800 text-base mb-3 border-b pb-2 flex items-center gap-2">
+              ⚠️ {confirmModal.title}
+            </h4>
+            <p className="text-xs text-slate-600 leading-relaxed font-semibold mb-6">
+              {confirmModal.message}
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+                className="px-4 py-2 text-xs font-extrabold text-slate-500 hover:text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                onClick={confirmModal.onConfirm}
+                className="px-4 py-2 text-xs font-extrabold text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition-colors shadow shadow-rose-200 cursor-pointer"
+              >
+                Xác nhận
+              </button>
             </div>
           </div>
         </div>

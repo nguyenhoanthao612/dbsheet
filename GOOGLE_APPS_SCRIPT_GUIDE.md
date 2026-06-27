@@ -28,9 +28,6 @@ function doGet(e) {
   var action = e.parameter.action;
   var sheetName = e.parameter.sheetName;
   
-  // Đảm bảo tất cả các bảng dữ liệu mẫu được khởi tạo tự động
-  initSheets();
-  
   if (action === 'getInitialData') {
     return handleGetInitialData();
   } else if (action === 'getData') {
@@ -44,8 +41,6 @@ function doPost(e) {
   var action = e.parameter.action;
   var postData = {};
   
-  initSheets();
-  
   try {
     if (e.postData && e.postData.contents) {
       postData = JSON.parse(e.postData.contents);
@@ -58,7 +53,9 @@ function doPost(e) {
     action = postData.action;
   }
   
-  if (action === 'addResult') {
+  if (action === 'initializeDatabase') {
+    return handleInitializeDatabase();
+  } else if (action === 'addResult') {
     return handleAddResult(postData);
   } else if (action === 'addLoginLog') {
     return handleAddLoginLog(postData);
@@ -79,7 +76,12 @@ function doPost(e) {
 
 // 1. LẤY DỮ LIỆU BAN ĐẦU (Học sinh, Quản trị viên, Đề thi)
 function handleGetInitialData() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheets = ss.getSheets();
+  var sheetNames = sheets.map(function(s) { return s.getName(); });
+  
   return jsonResponse({
+    sheetNames: sheetNames,
     students: getSheetDataAsObjects('students'),
     admin: getSheetDataAsObjects('admin'),
     exam_catalog: getSheetDataAsObjects('exam_catalog')
@@ -254,7 +256,16 @@ function getSheetDataAsObjects(sheetName) {
   return result;
 }
 
-// KHỞI TẠO CÁC BẢNG DỮ LIỆU MẪU ĐỂ NGƯỜI DÙNG KHÔNG CẦN TẠO THỦ CÔNG
+// KHỞI TẠO CẤU TRÚC CƠ SỞ DỮ LIỆU SẠCH (KHÔNG CÓ DỮ LIỆU MẪU)
+function handleInitializeDatabase() {
+  try {
+    initSheets();
+    return jsonResponse({ success: true, message: 'Đã khởi tạo cấu trúc cơ sở dữ liệu thành công' });
+  } catch (err) {
+    return jsonResponse({ success: false, error: 'INIT_FAILED', message: err.toString() });
+  }
+}
+
 function initSheets() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   
@@ -262,31 +273,18 @@ function initSheets() {
   if (!ss.getSheetByName('students')) {
     var sheet = ss.insertSheet('students');
     sheet.appendRow(['student_id', 'fullname', 'class', 'school', 'password', 'level', 'streak', 'status']);
-    
-    // Seed học sinh mẫu
-    sheet.appendRow(['HS001', 'Nguyễn Minh Quân', '8A1', 'THCS Chu Văn An', '123', '1', '3', 'active']);
-    sheet.appendRow(['HS002', 'Trần Khánh Linh', '9B2', 'THCS Lê Quý Đôn', '123', '2', '5', 'active']);
-    sheet.appendRow(['HS003', 'Lê Hoàng Nam', '8A3', 'THCS Chu Văn An', '123', '1', '1', 'active']);
-    sheet.appendRow(['HS004', 'Phạm Hải Yến', '9A1', 'THCS Thực Nghiệm', '123', '3', '12', 'active']);
   }
   
   // 2. Tạo bảng Quản trị (admin) nếu chưa có
   if (!ss.getSheetByName('admin')) {
     var sheet = ss.insertSheet('admin');
     sheet.appendRow(['username', 'fullname', 'password', 'role', 'status']);
-    sheet.appendRow(['admin', 'Thầy Minh Trí (Mascot Master)', 'admin', 'admin', 'active']);
   }
   
   // 3. Tạo bảng Đề thi (exam_catalog) nếu chưa có
   if (!ss.getSheetByName('exam_catalog')) {
     var sheet = ss.insertSheet('exam_catalog');
     sheet.appendRow(['exam_id', 'level', 'exam_name', 'category', 'time_limit', 'sheet_name', 'active']);
-    
-    sheet.appendRow(['OT1_LV1', '1', 'Đề Ôn Tập 1 - Nền tảng số căn bản', 'computing_fundamentals', '15', 'OT1_LV1', 'TRUE']);
-    sheet.appendRow(['OT2_LV1', '1', 'Đề Ôn Tập 2 - Ứng dụng văn phòng cơ bản', 'key_applications', '15', 'OT2_LV1', 'TRUE']);
-    sheet.appendRow(['OT1_LV2', '2', 'Đề Ôn Tập 1 - Thiết bị di động & Cloud', 'living_online', '20', 'OT1_LV2', 'TRUE']);
-    sheet.appendRow(['OT2_LV2', '2', 'Đề Ôn Tập 2 - Kỹ năng cộng tác trực tuyến', 'key_applications', '20', 'OT2_LV2', 'TRUE']);
-    sheet.appendRow(['OT1_LV3', '3', 'Đề Ôn Tập 1 - Tư duy thiết kế & An ninh nâng cao', 'computing_fundamentals', '25', 'OT1_LV3', 'TRUE']);
   }
   
   // 4. Tạo bảng Kết quả thi (results) nếu chưa có
@@ -297,72 +295,12 @@ function initSheets() {
       'level', 'exam_id', 'exam_name', 'score', 'correct', 
       'incorrect', 'duration', 'timestamp'
     ]);
-    sheet.appendRow(['res_1', 'HS001', 'Nguyễn Minh Quân', 'THCS Chu Văn An', '8A1', 'LV1', 'OT1_LV1', 'Đề Ôn Tập 1 - Nền tảng số căn bản', '85', '8', '2', '450', new Date().toISOString()]);
-    sheet.appendRow(['res_2', 'HS002', 'Trần Khánh Linh', 'THCS Lê Quý Đôn', '9B2', 'LV2', 'OT1_LV1', 'Đề Ôn Tập 1 - Nền tảng số căn bản', '90', '9', '1', '400', new Date().toISOString()]);
   }
   
   // 5. Tạo bảng Nhật ký đăng nhập (login_logs) nếu chưa có
   if (!ss.getSheetByName('login_logs')) {
     var sheet = ss.insertSheet('login_logs');
     sheet.appendRow(['timestamp', 'student_id', 'fullname', 'school', 'class', 'status']);
-  }
-  
-  // 6. Tạo câu hỏi mẫu cho đề thi OT1_LV1 nếu chưa có
-  if (!ss.getSheetByName('OT1_LV1')) {
-    var sheet = ss.insertSheet('OT1_LV1');
-    sheet.appendRow(['id', 'type', 'category', 'question', 'image', 'optionA', 'optionB', 'optionC', 'optionD', 'answer', 'explanation', 'tip']);
-    
-    sheet.appendRow([
-      'q1_1', 'multiple_choice', 'computing_fundamentals', 
-      'Thiết bị nào sau đây được coi là "bộ não" của toàn bộ máy tính, chịu trách nhiệm xử lý hầu hết các lệnh và dữ liệu?',
-      '',
-      'RAM (Bộ nhớ truy cập ngẫu nhiên)',
-      'CPU (Bộ vi xử lý trung tâm)',
-      'HDD (Ổ đĩa cứng)',
-      'GPU (Bộ xử lý đồ họa)',
-      'B',
-      'CPU (Central Processing Unit) là bộ vi xử lý trung tâm, đóng vai trò như bộ não điều khiển mọi hoạt động tính toán và xử lý của máy tính.',
-      'Hãy nhớ chữ "Central" (Trung tâm) nhé! CPU là trung tâm chỉ huy của máy tính đó!'
-    ]);
-    
-    sheet.appendRow([
-      'q1_2', 'multiple_response', 'computing_fundamentals', 
-      'Những thiết bị nào sau đây là thiết bị đầu vào (Input Devices)? (Chọn tất cả các đáp án đúng)',
-      '',
-      'Bàn phím (Keyboard)',
-      'Màn hình hiển thị (Monitor)',
-      'Chuột máy tính (Mouse)',
-      'Máy in (Printer)',
-      'A,C',
-      'Bàn phím và chuột dùng để gửi thông tin và lệnh vào máy tính, nên là thiết bị đầu vào. Màn hình và máy in nhận dữ liệu từ máy tính để hiển thị/in ra, nên là thiết bị đầu ra.',
-      'Nhập thông tin = Input! Bạn gõ bàn phím và click chuột chính là đang "nạp" dữ liệu cho máy đấy.'
-    ]);
-    
-    sheet.appendRow([
-      'q1_3', 'true_false', 'computing_fundamentals', 
-      'RAM là bộ nhớ tạm thời, dữ liệu lưu trong RAM sẽ bị mất sạch khi bạn tắt máy tính hoặc mất điện đột ngột.',
-      '',
-      'Đúng',
-      'Sai',
-      '',
-      '',
-      'A',
-      'RAM là bộ nhớ truy cập ngẫu nhiên và có đặc tính "khả biến" (volatile), nghĩa là nó cần điện để duy trì dữ liệu. Khi tắt máy, mọi dữ liệu lưu trên RAM sẽ biến mất.',
-      'Hãy nhớ lưu bài viết thường xuyên trước khi tắt nguồn! RAM sẽ quên sạch mọi thứ nếu mất điện đấy.'
-    ]);
-    
-    sheet.appendRow([
-      'q1_4', 'matching', 'computing_fundamentals', 
-      'Hãy nối phần mở rộng tệp tin ở cột bên trái với định dạng tệp tin tương ứng ở cột bên phải.',
-      '',
-      '.docx|Tài liệu Word',
-      '.xlsx|Bảng tính Excel',
-      '.mp3|Tệp âm thanh nén',
-      '.pdf|Tài liệu di động PDF',
-      'A,B,C,D',
-      '.docx là tệp Microsoft Word, .xlsx là tệp Microsoft Excel, .mp3 là tệp âm thanh, .pdf là định dạng tài liệu di động của Adobe.',
-      'Cần thận kẻo nhầm lẫn nhé! x trong xlsx chính là bảng tính Excel có các ô dòng cột chéo nhau!'
-    ]);
   }
   
   // Xóa sheet mặc định "Trang tính1" hoặc "Sheet1" nếu có để giao diện gọn gàng
@@ -393,9 +331,18 @@ function handleUpdateExam(data) {
     return jsonResponse({ error: 'MISSING_EXAM_ID', message: 'Thiếu mã đề thi' });
   }
   
+  // Kiểm tra đổi tên bảng và cập nhật sheet tương ứng
+  if (data.old_sheet_name && data.old_sheet_name !== data.sheet_name) {
+    var oldSheet = ss.getSheetByName(data.old_sheet_name);
+    if (oldSheet) {
+      oldSheet.setName(data.sheet_name);
+    }
+  }
+  
+  var searchId = data.old_exam_id || examId;
   var rowIndex = -1;
   for (var i = 1; i < values.length; i++) {
-    if (String(values[i][examIdCol]).trim() === String(examId).trim()) {
+    if (String(values[i][examIdCol]).trim() === String(searchId).trim()) {
       rowIndex = i + 1;
       break;
     }
@@ -431,7 +378,7 @@ function handleUpdateExam(data) {
   var examSheetName = updateData['sheet_name'];
   if (!ss.getSheetByName(examSheetName)) {
     var newSheet = ss.insertSheet(examSheetName);
-    newSheet.appendRow(['id', 'type', 'category', 'question', 'image', 'optionA', 'optionB', 'optionC', 'optionD', 'answer', 'explanation', 'tip']);
+    newSheet.appendRow(['id', 'type', 'category', 'question', 'image', 'options', 'answer', 'explanation', 'tip']);
   }
   
   return jsonResponse({ success: true, message: rowIndex !== -1 ? 'Đã cập nhật đề thi' : 'Đã thêm đề thi mới' });
@@ -448,7 +395,7 @@ function handleUpdateQuestion(data) {
   var sheet = ss.getSheetByName(sheetName);
   if (!sheet) {
     sheet = ss.insertSheet(sheetName);
-    sheet.appendRow(['id', 'type', 'category', 'question', 'image', 'optionA', 'optionB', 'optionC', 'optionD', 'answer', 'explanation', 'tip']);
+    sheet.appendRow(['id', 'type', 'category', 'question', 'image', 'options', 'answer', 'explanation', 'tip']);
   }
   
   var values = sheet.getDataRange().getValues();
@@ -472,20 +419,16 @@ function handleUpdateQuestion(data) {
     }
   }
   
-  var updateData = {
-    'id': qId,
-    'type': data.type || 'multiple_choice',
-    'category': data.category || 'computing_fundamentals',
-    'question': data.question || '',
-    'image': data.image || '',
-    'optionA': data.optionA || '',
-    'optionB': data.optionB || '',
-    'optionC': data.optionC || '',
-    'optionD': data.optionD || '',
-    'answer': data.answer || '',
-    'explanation': data.explanation || '',
-    'tip': data.tip || ''
-  };
+  // Tạo đối tượng dữ liệu cập nhật động (hỗ trợ không giới hạn số lượng optionA, optionB, optionC, ..., optionZ)
+  var updateData = {};
+  for (var key in data) {
+    updateData[key] = data[key];
+  }
+  updateData['id'] = qId;
+  if (!updateData['type']) updateData['type'] = 'multiple_choice';
+  if (!updateData['category']) updateData['category'] = 'computing_fundamentals';
+  if (!updateData['question']) updateData['question'] = '';
+  if (!updateData['answer']) updateData['answer'] = '';
   
   if (rowIndex !== -1) {
     for (var colName in updateData) {
@@ -517,7 +460,7 @@ function handleSaveQuestionsBatch(data) {
   var sheet = ss.getSheetByName(sheetName);
   if (!sheet) {
     sheet = ss.insertSheet(sheetName);
-    sheet.appendRow(['id', 'type', 'category', 'question', 'image', 'optionA', 'optionB', 'optionC', 'optionD', 'answer', 'explanation', 'tip']);
+    sheet.appendRow(['id', 'type', 'category', 'question', 'image', 'options', 'answer', 'explanation', 'tip']);
   }
   
   var questions = data.questions;
@@ -551,20 +494,16 @@ function handleSaveQuestionsBatch(data) {
       }
     }
     
-    var updateData = {
-      'id': qId,
-      'type': q.type || 'multiple_choice',
-      'category': q.category || 'computing_fundamentals',
-      'question': q.question || '',
-      'image': q.image || '',
-      'optionA': q.optionA || '',
-      'optionB': q.optionB || '',
-      'optionC': q.optionC || '',
-      'optionD': q.optionD || '',
-      'answer': q.answer || '',
-      'explanation': q.explanation || '',
-      'tip': q.tip || ''
-    };
+    // Tạo đối tượng dữ liệu cập nhật động (hỗ trợ không giới hạn số lượng optionA, optionB, optionC, ..., optionZ)
+    var updateData = {};
+    for (var key in q) {
+      updateData[key] = q[key];
+    }
+    updateData['id'] = qId;
+    if (!updateData['type']) updateData['type'] = 'multiple_choice';
+    if (!updateData['category']) updateData['category'] = 'computing_fundamentals';
+    if (!updateData['question']) updateData['question'] = '';
+    if (!updateData['answer']) updateData['answer'] = '';
     
     if (rowIndex !== -1) {
       for (var colName in updateData) {
@@ -602,6 +541,14 @@ function handleDeleteRow(data) {
   
   if (!sheetName || !keyColumn || !keyValue) {
     return jsonResponse({ error: 'MISSING_PARAMS', message: 'Thiếu tham số xóa dữ liệu' });
+  }
+  
+  // Nếu đang xóa một dòng trong danh mục đề thi (exam_catalog), tự động xóa luôn bảng/sheet câu hỏi tương ứng
+  if (sheetName === 'exam_catalog' && keyColumn === 'exam_id') {
+    var examSheet = ss.getSheetByName(keyValue);
+    if (examSheet) {
+      ss.deleteSheet(examSheet);
+    }
   }
   
   var sheet = ss.getSheetByName(sheetName);

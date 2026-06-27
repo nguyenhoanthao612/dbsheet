@@ -154,9 +154,18 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         }
 
         const admins = getAdmins();
-        const admin = admins.find(
+        let admin = admins.find(
           (a) => a.username.toLowerCase() === adminUsername.trim().toLowerCase() && a.password === adminPassword
         );
+
+        // Fallback if no admin account exists in database to prevent system lock
+        if (!admin && admins.length === 0 && adminUsername.trim().toLowerCase() === 'admin' && adminPassword === 'admin') {
+          admin = {
+            username: 'admin',
+            name: 'Quản Trị Viên Hệ Thống',
+            password: 'admin'
+          };
+        }
 
         if (!admin) {
           setError('Tài khoản quản trị hoặc mật khẩu không chính xác!');

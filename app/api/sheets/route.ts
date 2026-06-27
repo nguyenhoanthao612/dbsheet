@@ -86,7 +86,26 @@ export async function POST(req: NextRequest) {
       }, { status: 200 });
     }
 
-    const res = await fetch(appsScriptUrl.trim(), {
+    // Forward search parameters (e.g., ?action=updateExam) to Google Apps Script for maximum compatibility
+    let targetUrl = appsScriptUrl.trim();
+    const queryParams = new URLSearchParams();
+    searchParams.forEach((value, key) => {
+      if (key !== 'customUrl') {
+        queryParams.set(key, value);
+      }
+    });
+
+    // Ensure action is included in the query parameters
+    if (body && body.action && !queryParams.has('action')) {
+      queryParams.set('action', body.action);
+    }
+
+    const queryStr = queryParams.toString();
+    if (queryStr) {
+      targetUrl += (targetUrl.includes('?') ? '&' : '?') + queryStr;
+    }
+
+    const res = await fetch(targetUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
