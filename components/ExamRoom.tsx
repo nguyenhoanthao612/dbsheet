@@ -27,7 +27,7 @@ function shuffleQuestionsList(qList: Question[]): Question[] {
     const cloned = JSON.parse(JSON.stringify(q)) as Question;
 
     try {
-      if (cloned.type === 'multiple_choice' || cloned.type === 'image_based' || cloned.type === 'scenario') {
+      if (cloned.type === 'multiple_choice') {
         if (Array.isArray(cloned.options) && cloned.options.length > 0) {
           const originalOptions: string[] = cloned.options;
           const originalCorrectAnswer = cloned.correctAnswer;
@@ -53,6 +53,22 @@ function shuffleQuestionsList(qList: Question[]): Question[] {
               .filter((idx: number) => idx !== -1);
           }
         }
+      } else if (cloned.type === 'video_based') {
+        if (cloned.options && Array.isArray(cloned.options.options) && cloned.options.options.length > 0) {
+          const originalOptions: string[] = cloned.options.options;
+          const isMrq = !!cloned.options.isMultipleResponse;
+          const indices: number[] = originalOptions.map((_: any, i: number) => i);
+          const shuffledIndices = shuffleArray<number>(indices);
+          cloned.options.options = shuffledIndices.map((i: number) => originalOptions[i]);
+          
+          if (isMrq && Array.isArray(cloned.correctAnswer)) {
+            cloned.correctAnswer = cloned.correctAnswer
+              .map((oldIdx: number) => shuffledIndices.indexOf(oldIdx))
+              .filter((idx: number) => idx !== -1);
+          } else if (!isMrq && typeof cloned.correctAnswer === 'number') {
+            cloned.correctAnswer = shuffledIndices.indexOf(cloned.correctAnswer);
+          }
+        }
       } else if (cloned.type === 'matching') {
         if (cloned.options && Array.isArray(cloned.options.itemsB) && Array.isArray(cloned.correctAnswer)) {
           const itemsB: string[] = cloned.options.itemsB;
@@ -71,19 +87,6 @@ function shuffleQuestionsList(qList: Question[]): Question[] {
           const shuffledSteps = shuffleArray<string>(originalSteps);
           cloned.options = shuffledSteps;
           cloned.correctAnswer = correctSteps.map((step: string) => shuffledSteps.indexOf(step));
-        }
-      } else if (cloned.type === 'drag_drop') {
-        if (cloned.options && Array.isArray(cloned.options.items)) {
-          cloned.options.items = shuffleArray<string>(cloned.options.items);
-        }
-      } else if (cloned.type === 'dropdown') {
-        if (cloned.options && Array.isArray(cloned.options.dropdownOptions)) {
-          cloned.options.dropdownOptions = cloned.options.dropdownOptions.map((opts: string[]) => {
-            if (Array.isArray(opts)) {
-              return shuffleArray<string>(opts);
-            }
-            return opts;
-          });
         }
       }
     } catch (err) {
@@ -148,7 +151,7 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
   const checkAnswerCorrectness = (q: Question, uAns: any) => {
     if (uAns === undefined || uAns === null) return false;
 
-    if (q.type === 'multiple_choice' || q.type === 'image_based' || q.type === 'scenario') {
+    if (q.type === 'multiple_choice') {
       return uAns === q.correctAnswer;
     }
     if (q.type === 'true_false') {
@@ -160,15 +163,24 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
       if (uArr.length !== cArr.length) return false;
       return uArr.every((v: number) => cArr.includes(v));
     }
-    if (q.type === 'fill_blank') {
-      const cleanUser = uAns.toString().trim().toLowerCase();
-      const possibleAnswers: string[] = Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer];
-      return possibleAnswers.some((ans: string) => ans.trim().toLowerCase() === cleanUser);
+    if (q.type === 'true_false_multiple') {
+      const uArr = Array.isArray(uAns) ? uAns : [];
+      const cArr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [];
+      if (uArr.length !== cArr.length) return false;
+      return uArr.every((v: boolean, i: number) => v === cArr[i]);
+    }
+    if (q.type === 'video_based') {
+      const opts = q.options as any;
+      if (opts?.isMultipleResponse) {
+        const uArr = Array.isArray(uAns) ? uAns : [];
+        const cArr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [];
+        if (uArr.length !== cArr.length) return false;
+        return uArr.every((v: number) => cArr.includes(v));
+      } else {
+        return uAns === q.correctAnswer;
+      }
     }
     if (q.type === 'matching' || q.type === 'sequence') {
-      return JSON.stringify(uAns) === JSON.stringify(q.correctAnswer);
-    }
-    if (q.type === 'drag_drop' || q.type === 'dropdown') {
       return JSON.stringify(uAns) === JSON.stringify(q.correctAnswer);
     }
     return false;

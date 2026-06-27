@@ -5,13 +5,9 @@ export enum QuestionType {
   MULTIPLE_RESPONSE = 'multiple_response',
   TRUE_FALSE = 'true_false',
   MATCHING = 'matching',
-  DRAG_DROP = 'drag_drop',
-  FILL_BLANK = 'fill_blank',
-  DROPDOWN = 'dropdown',
-  IMAGE_BASED = 'image_based',
-  SCENARIO = 'scenario',
   SEQUENCE = 'sequence',
-  HOTSPOT = 'hotspot',
+  TRUE_FALSE_MULTIPLE = 'true_false_multiple',
+  VIDEO_BASED = 'video_based',
 }
 
 export enum IC3Category {

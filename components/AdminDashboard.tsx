@@ -12,10 +12,10 @@ import {
   syncDatabaseFromGoogleSheets,
   initializeDatabaseOnGoogleSheet
 } from '../lib/sheets';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, Reorder } from 'motion/react';
 import {
   Users, BookOpen, HelpCircle, BarChart3, Plus, Edit2, Trash2, Copy, Search, Lock, Unlock,
-  ShieldCheck, RefreshCw, Eye, Sparkles, CheckCircle2, ChevronRight, X, LayoutGrid, Info, ArrowLeft, Check, Settings
+  ShieldCheck, RefreshCw, Eye, Sparkles, CheckCircle2, ChevronRight, X, LayoutGrid, Info, ArrowLeft, Check, Settings, GripVertical
 } from 'lucide-react';
 import QuestionRenderer from './QuestionRenderer';
 
@@ -81,7 +81,11 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
     { left: '', right: '' }
   ]);
   const [sequenceSteps, setSequenceSteps] = useState<string[]>(['', '', '', '']);
-  const [hotspotCoords, setHotspotCoords] = useState<{ x: number; y: number; r: number }>({ x: 50, y: 50, r: 10 });
+  const [tfmStatements, setTfmStatements] = useState<{ text: string; isTrue: boolean }[]>([{ text: '', isTrue: true }]);
+  const [videoUrl, setVideoUrl] = useState('');
+  const [videoTitle, setVideoTitle] = useState('');
+  const [videoDuration, setVideoDuration] = useState('');
+  const [isVideoMrq, setIsVideoMrq] = useState(false);
 
   // States for individual question auto-parsing
   const [parsingError, setParsingError] = useState<string | null>(null);
@@ -556,7 +560,9 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
     triggerConfirm(
       'Xóa Đề Thi',
       `Xác nhận: Bạn có muốn xóa đề thi ${testCode} và tất cả các câu hỏi thuộc đề này không? Hành động này sẽ được đồng bộ hóa lên Google Sheets.`,
-      () => {
+      async () => {
+        const targetTest = getTests().find((t) => t.code === testCode);
+        
         const allTests = getTests().filter((t) => t.code !== testCode);
         saveTests(allTests);
         setTests(allTests);
@@ -565,7 +571,23 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
         saveQuestions(allQuestions);
         setQuestions(allQuestions);
 
-        deleteRowInGoogleSheet('exam_catalog', 'exam_id', testCode);
+        // Rename the tab to [DELETED]_ prefix to keep data but mark as deleted
+        const deletedCode = `[DELETED]_${testCode}`;
+        
+        await updateExamInGoogleSheet({
+          exam_id: deletedCode,
+          level: targetTest?.level || 1,
+          exam_name: targetTest?.title || deletedCode,
+          category: targetTest?.category || 'Computing Fundamentals',
+          time_limit: targetTest?.timeLimit || 15,
+          sheet_name: deletedCode,
+          active: false,
+          old_exam_id: testCode,
+          old_sheet_name: testCode
+        });
+
+        // Delete the row from exam_catalog
+        await deleteRowInGoogleSheet('exam_catalog', 'exam_id', deletedCode);
       }
     );
   };
@@ -898,7 +920,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
     setQCorrectAnsText(parsed.correctAnswer);
     setParsingError(parsed.error || null);
 
-    if (parsed.type === QuestionType.MULTIPLE_CHOICE || parsed.type === QuestionType.MULTIPLE_RESPONSE || parsed.type === QuestionType.IMAGE_BASED || parsed.type === QuestionType.SCENARIO) {
+    if (parsed.type === QuestionType.MULTIPLE_CHOICE || parsed.type === QuestionType.MULTIPLE_RESPONSE) {
       setMcqOpts(parsed.options);
     }
 
@@ -954,7 +976,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
       setQTip(q.tip || '');
       
       // Set options & correct answer depending on type
-      if (q.type === QuestionType.MULTIPLE_CHOICE || q.type === QuestionType.IMAGE_BASED || q.type === QuestionType.SCENARIO) {
+      if (q.type === QuestionType.MULTIPLE_CHOICE) {
         if (Array.isArray(q.options)) {
           setQOptionsText(q.options.join('\n'));
         }
@@ -977,29 +999,29 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
         if (Array.isArray(q.correctAnswer)) {
           setQCorrectAnsText(q.correctAnswer.join(','));
         }
-      } else if (q.type === QuestionType.DRAG_DROP) {
-        if (q.options && q.options.textWithBlanks) {
-          const optText = `VĂN BẢN: ${q.options.textWithBlanks}\nLỰA CHỌN:\n${Array.isArray(q.options.items) ? q.options.items.join('\n') : ''}`;
-          setQOptionsText(optText);
+      } else if (q.type === QuestionType.TRUE_FALSE_MULTIPLE) {
+        if (Array.isArray(q.options)) {
+          const stmts = q.options.map((opt: string, idx: number) => ({
+            text: opt,
+            isTrue: Array.isArray(q.correctAnswer) ? !!q.correctAnswer[idx] : true
+          }));
+          setTfmStatements(stmts);
+        }
+      } else if (q.type === QuestionType.VIDEO_BASED) {
+        if (q.options) {
+          const opts = q.options as any;
+          setVideoUrl(opts.videoUrl || '');
+          setVideoTitle(opts.videoTitle || '');
+          setVideoDuration(opts.videoDuration || '');
+          setIsVideoMrq(!!opts.isMultipleResponse);
+          if (Array.isArray(opts.options)) {
+            setMcqOpts(opts.options);
+          }
         }
         if (Array.isArray(q.correctAnswer)) {
           setQCorrectAnsText(q.correctAnswer.join(','));
-        }
-      } else if (q.type === QuestionType.DROPDOWN) {
-        if (q.options && q.options.textWithDropdowns) {
-          const lines = Array.isArray(q.options.dropdownOptions) 
-            ? q.options.dropdownOptions.map((arr: string[]) => arr.join(', ')).join('\n')
-            : '';
-          const optText = `VĂN BẢN: ${q.options.textWithDropdowns}\nLỰA CHỌN:\n${lines}`;
-          setQOptionsText(optText);
-        }
-        if (Array.isArray(q.correctAnswer)) {
-          setQCorrectAnsText(q.correctAnswer.join(','));
-        }
-      } else if (q.type === QuestionType.FILL_BLANK) {
-        setQOptionsText('');
-        if (Array.isArray(q.correctAnswer)) {
-          setQCorrectAnsText(q.correctAnswer.join(','));
+        } else {
+          setQCorrectAnsText(String(q.correctAnswer));
         }
       } else if (q.type === QuestionType.SEQUENCE) {
         if (Array.isArray(q.options)) {
@@ -1047,7 +1069,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
       setQCorrectAnsText(parsed.correctAnswer);
       setParsingError(parsed.error || null);
 
-      if (parsed.type === QuestionType.MULTIPLE_CHOICE || parsed.type === QuestionType.MULTIPLE_RESPONSE || parsed.type === QuestionType.IMAGE_BASED || parsed.type === QuestionType.SCENARIO) {
+      if (parsed.type === QuestionType.MULTIPLE_CHOICE || parsed.type === QuestionType.MULTIPLE_RESPONSE) {
         setMcqOpts(parsed.options);
       }
 
@@ -1179,7 +1201,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
       setQTip(q.tip);
 
       // Convert options và correctAnswers sang string tiện chỉnh sửa
-      if (q.type === QuestionType.MULTIPLE_CHOICE || q.type === QuestionType.MULTIPLE_RESPONSE || q.type === QuestionType.IMAGE_BASED || q.type === QuestionType.SCENARIO) {
+      if (q.type === QuestionType.MULTIPLE_CHOICE || q.type === QuestionType.MULTIPLE_RESPONSE) {
         const opts = q.options || [];
         setQOptionsText(opts.join('\n'));
         const ansText = Array.isArray(q.correctAnswer) ? q.correctAnswer.join(',') : q.correctAnswer.toString();
@@ -1203,22 +1225,6 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
         const lines = itemA.map((it: string, i: number) => ({ left: it, right: itemB[i] || '' }));
         while (lines.length < 4) lines.push({ left: '', right: '' });
         setMatchingLines(lines);
-      } else if (q.type === QuestionType.DRAG_DROP || q.type === QuestionType.DROPDOWN) {
-        const txt = q.type === QuestionType.DRAG_DROP ? q.options?.textWithBlanks : q.options?.textWithDropdowns;
-        const itemsList = q.type === QuestionType.DRAG_DROP ? q.options?.items : q.options?.dropdownOptions;
-        
-        let optStr = `VĂN BẢN:\n${txt}\n\nLỰA CHỌN:\n`;
-        if (q.type === QuestionType.DRAG_DROP) {
-          optStr += (itemsList || []).join('\n');
-        } else {
-          optStr += (itemsList || []).map((arr: string[]) => arr.join(', ')).join('\n');
-        }
-
-        setQOptionsText(optStr);
-        setQCorrectAnsText((q.correctAnswer || []).join(','));
-      } else if (q.type === QuestionType.FILL_BLANK) {
-        setQOptionsText('');
-        setQCorrectAnsText(Array.isArray(q.correctAnswer) ? q.correctAnswer.join(',') : q.correctAnswer.toString());
       } else if (q.type === QuestionType.SEQUENCE) {
         const opts = q.options || [];
         setQOptionsText(opts.join('\n'));
@@ -1234,12 +1240,33 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
         const finalSteps = orderedSteps.filter(Boolean);
         while (finalSteps.length < 4) finalSteps.push('');
         setSequenceSteps(finalSteps);
-      } else if (q.type === QuestionType.HOTSPOT) {
-        setQOptionsText('Vị trí hợp lệ');
-        const corr = q.correctAnswer as { x: number; y: number; radius?: number; r?: number } || { x: 50, y: 50, radius: 10 };
-        const rVal = corr.radius !== undefined ? corr.radius : (corr.r !== undefined ? corr.r : 10);
-        setQCorrectAnsText(`${corr.x},${corr.y},${rVal}`);
-        setHotspotCoords({ x: corr.x, y: corr.y, r: rVal });
+      } else if (q.type === QuestionType.TRUE_FALSE_MULTIPLE) {
+        const opts = q.options || [];
+        const corrAns = q.correctAnswer || [];
+        const statements = opts.map((opt: string, idx: number) => ({
+          text: opt,
+          isTrue: corrAns[idx] ?? true,
+        }));
+        if (statements.length === 0) statements.push({ text: '', isTrue: true });
+        setTfmStatements(statements);
+        setQOptionsText(opts.join('\n'));
+        setQCorrectAnsText(corrAns.join(','));
+      } else if (q.type === QuestionType.VIDEO_BASED) {
+        const opts = q.options?.options || [];
+        setVideoUrl(q.options?.videoUrl || '');
+        setVideoTitle(q.options?.title || '');
+        setVideoDuration(q.options?.duration || '');
+        setIsVideoMrq(q.options?.isMultipleResponse || false);
+        
+        setQOptionsText(opts.join('\n'));
+        const ansText = Array.isArray(q.correctAnswer) ? q.correctAnswer.join(',') : q.correctAnswer.toString();
+        setQCorrectAnsText(ansText);
+        
+        const extendedOpts = [...opts];
+        if (extendedOpts.length === 0) {
+          extendedOpts.push('', '', '', '');
+        }
+        setMcqOpts(extendedOpts);
       }
     } else {
       setEditingQuestion(null);
@@ -1262,7 +1289,15 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
         { left: 'A4', right: 'B4' }
       ]);
       setSequenceSteps(['Bước 1', 'Bước 2', 'Bước 3', 'Bước 4']);
-      setHotspotCoords({ x: 50, y: 50, r: 10 });
+      setTfmStatements([
+        { text: 'Phát biểu 1', isTrue: true },
+        { text: 'Phát biểu 2', isTrue: false },
+        { text: 'Phát biểu 3', isTrue: true },
+      ]);
+      setVideoUrl('');
+      setVideoTitle('');
+      setVideoDuration('');
+      setIsVideoMrq(false);
     }
     setPreviewingQuestionObj(null);
     setShowQuestionModal(true);
@@ -1287,7 +1322,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
     let parsedCorrectAnswer: any = null;
 
     try {
-      if (qType === QuestionType.MULTIPLE_CHOICE || qType === QuestionType.IMAGE_BASED || qType === QuestionType.SCENARIO) {
+      if (qType === QuestionType.MULTIPLE_CHOICE) {
         const emptyIndex = mcqOpts.findIndex(o => !o.trim());
         if (emptyIndex !== -1 && showErrorAlerts) {
           alert(`Lựa chọn thứ ${emptyIndex + 1} (${String.fromCharCode(65 + emptyIndex)}) đang bị trống. Vui lòng điền đầy đủ hoặc xóa đáp án này.`);
@@ -1350,34 +1385,44 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
         const itemsB = lines.map((l) => l.split('||')[1].trim());
         parsedOptions = { itemsA, itemsB };
         parsedCorrectAnswer = qCorrectAnsText.split(',').map((n) => parseInt(n.trim()));
-      } else if (qType === QuestionType.DRAG_DROP) {
-        const sections = qOptionsText.split('LỰA CHỌN:');
-        const textWithBlanks = sections[0].replace('VĂN BẢN:', '').trim();
-        const items = sections[1] ? sections[1].split('\n').map((w) => w.trim()).filter((w) => w) : [];
-        parsedOptions = { textWithBlanks, items };
-        parsedCorrectAnswer = qCorrectAnsText.split(',').map((s) => s.trim());
-      } else if (qType === QuestionType.DROPDOWN) {
-        const sections = qOptionsText.split('LỰA CHỌN:');
-        const textWithDropdowns = sections[0].replace('VĂN BẢN:', '').trim();
-        const dropdownOptions = sections[1]
-          ? sections[1].split('\n').map((line) => line.split(',').map((word) => word.trim())).filter((arr) => arr.length > 0 && arr[0] !== '')
-          : [];
-        parsedOptions = { textWithDropdowns, dropdownOptions };
-        parsedCorrectAnswer = qCorrectAnsText.split(',').map((s) => s.trim());
-      } else if (qType === QuestionType.FILL_BLANK) {
-        parsedOptions = [];
-        parsedCorrectAnswer = qCorrectAnsText.split(',').map((s) => s.trim());
       } else if (qType === QuestionType.SEQUENCE) {
         parsedOptions = qOptionsText.split('\n').map((o) => o.trim()).filter((o) => o);
         parsedCorrectAnswer = qCorrectAnsText.split(',').map((n) => parseInt(n.trim()));
-      } else if (qType === QuestionType.HOTSPOT) {
-        parsedOptions = ["Vị trí hợp lệ"];
-        const parts = qCorrectAnsText.split(',').map(p => parseInt(p.trim()));
-        parsedCorrectAnswer = { 
-          x: parts[0] !== undefined && !isNaN(parts[0]) ? parts[0] : 50, 
-          y: parts[1] !== undefined && !isNaN(parts[1]) ? parts[1] : 50, 
-          radius: parts[2] !== undefined && !isNaN(parts[2]) ? parts[2] : 10 
+      } else if (qType === QuestionType.TRUE_FALSE_MULTIPLE) {
+        const validStatements = tfmStatements.filter(s => s.text.trim());
+        parsedOptions = validStatements.map(s => s.text.trim());
+        parsedCorrectAnswer = validStatements.map(s => s.isTrue);
+      } else if (qType === QuestionType.VIDEO_BASED) {
+        const validOptions = mcqOpts.map((o) => o.trim()).filter(Boolean);
+        parsedOptions = {
+          videoUrl,
+          title: videoTitle,
+          duration: videoDuration,
+          isMultipleResponse: isVideoMrq,
+          options: validOptions
         };
+        if (isVideoMrq) {
+          const parts = qCorrectAnsText.split(',').map((s) => s.trim()).filter(Boolean);
+          parsedCorrectAnswer = parts.map((part) => {
+            let parsedIdx = parseInt(part);
+            if (isNaN(parsedIdx)) {
+              const letterCode = part.toUpperCase();
+              if (letterCode.length === 1 && letterCode >= 'A' && letterCode <= 'Z') {
+                parsedIdx = letterCode.charCodeAt(0) - 65;
+              }
+            }
+            return parsedIdx;
+          }).filter((idx) => !isNaN(idx) && idx >= 0 && idx < validOptions.length);
+        } else {
+          let parsedIdx = parseInt(qCorrectAnsText.trim());
+          if (isNaN(parsedIdx)) {
+            const letterCode = qCorrectAnsText.trim().toUpperCase();
+            if (letterCode.length === 1 && letterCode >= 'A' && letterCode <= 'Z') {
+              parsedIdx = letterCode.charCodeAt(0) - 65;
+            }
+          }
+          parsedCorrectAnswer = isNaN(parsedIdx) ? 0 : parsedIdx;
+        }
       }
 
       return {
@@ -2295,13 +2340,9 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                       <option value={QuestionType.MULTIPLE_RESPONSE}>2. Multiple Response</option>
                       <option value={QuestionType.TRUE_FALSE}>3. True / False</option>
                       <option value={QuestionType.MATCHING}>4. Matching</option>
-                      <option value={QuestionType.DRAG_DROP}>5. Drag and Drop</option>
-                      <option value={QuestionType.FILL_BLANK}>6. Fill in the Blank</option>
-                      <option value={QuestionType.DROPDOWN}>7. Dropdown Selection</option>
-                      <option value={QuestionType.IMAGE_BASED}>8. Image-based</option>
-                      <option value={QuestionType.SCENARIO}>9. Scenario Question</option>
-                      <option value={QuestionType.SEQUENCE}>10. Sequence Ordering</option>
-                      <option value={QuestionType.HOTSPOT}>11. Interactive Hotspot</option>
+                      <option value={QuestionType.SEQUENCE}>5. Sequence Ordering</option>
+                      <option value={QuestionType.TRUE_FALSE_MULTIPLE}>6. True/False Multiple</option>
+                      <option value={QuestionType.VIDEO_BASED}>7. Video Based</option>
                     </select>
                   </div>
                   <div>
@@ -2383,23 +2424,17 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                   {qType === QuestionType.MATCHING && (
                     <p>• <strong>Lựa chọn:</strong> Mỗi dòng gồm 1 cặp ghép nối dạng &apos;Vế A|Vế B&apos;.<br />• <strong>Đáp án đúng:</strong> Các cặp ghép đúng sẽ tự động được đồng bộ và lưu trữ.</p>
                   )}
-                  {qType === QuestionType.DRAG_DROP && (
-                    <p>• <strong>Nội dung:</strong> Chèn <strong>[blank0]</strong>, <strong>[blank1]</strong>... vào chỗ trống.<br />• <strong>Đáp án đúng:</strong> Các từ đúng tương ứng cách nhau bằng dấu phẩy.</p>
+                  {qType === QuestionType.TRUE_FALSE_MULTIPLE && (
+                    <p>• <strong>Phát biểu:</strong> Thêm các phát biểu và đánh dấu Đúng/Sai cho từng phát biểu.</p>
                   )}
-                  {qType === QuestionType.FILL_BLANK && (
-                    <p>• <strong>Đáp án đúng:</strong> Gõ các từ khóa đúng được chấp nhận, ngăn cách nhau bằng dấu phẩy.</p>
-                  )}
-                  {qType === QuestionType.DROPDOWN && (
-                    <p>• <strong>Nội dung:</strong> Chèn <strong>[drop0]</strong>, <strong>[drop1]</strong>... vào ô lựa chọn.<br />• <strong>Đáp án đúng:</strong> Các từ đúng tương ứng cách nhau bằng dấu phẩy.</p>
-                  )}
-                  {qType === QuestionType.HOTSPOT && (
-                    <p>• <strong>Đáp án đúng:</strong> Bấm chuột lên ảnh demo phía dưới để xác định tọa độ vùng đúng.</p>
+                  {qType === QuestionType.VIDEO_BASED && (
+                    <p>• <strong>Video:</strong> Nhập link video (YouTube) và điền câu hỏi. Hỗ trợ câu hỏi một hoặc nhiều đáp án.</p>
                   )}
                   {qType === QuestionType.SEQUENCE && (
                     <p>• <strong>Các bước:</strong> Nhập các bước theo đúng trình tự từ trước đến sau. Hệ thống sẽ tự động xáo trộn khi hiển thị.</p>
                   )}
                 
-                {(qType === QuestionType.MULTIPLE_CHOICE || qType === QuestionType.MULTIPLE_RESPONSE || qType === QuestionType.IMAGE_BASED || qType === QuestionType.SCENARIO) && (
+                {(qType === QuestionType.MULTIPLE_CHOICE || qType === QuestionType.MULTIPLE_RESPONSE) && (
                   <div className="space-y-4 p-5 bg-slate-50 border border-slate-200 rounded-3xl shadow-sm">
                     <div className="flex justify-between items-center pb-2 border-b border-slate-200">
                       <div>
@@ -2493,7 +2528,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                                 setTimeout(() => handlePreviewQuestion(), 50);
                               }}
                               placeholder={
-                                qType === QuestionType.IMAGE_BASED
+                                qType === QuestionType.MULTIPLE_CHOICE
                                   ? "Nhập đường dẫn ảnh hoặc mô tả..."
                                   : `Nội dung lựa chọn ${letter}...`
                               }
@@ -2581,9 +2616,14 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                 )}
 
                 {qType === QuestionType.MATCHING && (
-                  <div className="space-y-3 p-4 bg-slate-50 border border-slate-250 rounded-2xl">
-                    <div className="flex justify-between items-center">
-                      <label className="block text-[10px] font-black text-indigo-700 uppercase">Cấu hình Cặp Ghép Nối (Cột A ↔ Cột B tương ứng ghép đúng)</label>
+                  <div className="space-y-4 p-5 bg-slate-50 border border-slate-200 rounded-3xl shadow-sm">
+                    <div className="flex justify-between items-center pb-2 border-b border-slate-200">
+                      <div>
+                        <label className="block text-[11px] font-black text-indigo-700 uppercase">Cấu hình Cặp Ghép Nối</label>
+                        <span className="text-[10px] text-slate-400 font-bold block">
+                          Mỗi cặp gồm một vế trái và một vế phải tương ứng đúng.
+                        </span>
+                      </div>
                       <button
                         type="button"
                         onClick={() => {
@@ -2593,229 +2633,302 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                           setQOptionsText(combined);
                           setQCorrectAnsText(newLines.map((_, i) => i).join(','));
                         }}
-                        className="text-[10px] py-1 px-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-lg shadow transition-all flex items-center gap-1"
+                        className="text-[11px] py-1.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl shadow-sm transition-all flex items-center gap-1"
                       >
-                        + Thêm Cặp
+                        <Plus className="w-4 h-4" /> Thêm cặp ghép
                       </button>
                     </div>
 
-                    <div className="space-y-2">
+                    <div className="space-y-4">
                       {matchingLines.map((line, idx) => (
-                        <div key={idx} className="flex items-center gap-2 bg-white p-2 border border-slate-200 rounded-xl shadow-sm">
-                          <span className="w-5 h-5 rounded-lg bg-slate-100 flex items-center justify-center text-[10px] font-black text-slate-500">
-                            {idx + 1}
-                          </span>
-                          <input
-                            type="text"
-                            value={line.left}
-                            onChange={(e) => {
-                              const newLines = [...matchingLines];
-                              newLines[idx].left = e.target.value;
-                              setMatchingLines(newLines);
-                              const combined = newLines.map(l => `${l.left} || ${l.right}`).join('\n');
-                              setQOptionsText(combined);
-                              setQCorrectAnsText(newLines.map((_, i) => i).join(','));
-                              setTimeout(() => handlePreviewQuestion(), 50);
-                            }}
-                            placeholder="Cột Trái A..."
-                            className="flex-1 p-2 border border-slate-100 rounded-lg text-xs font-bold bg-slate-50 focus:bg-white outline-none"
-                          />
-                          <span className="text-slate-400 font-extrabold text-sm px-1">↔</span>
-                          <input
-                            type="text"
-                            value={line.right}
-                            onChange={(e) => {
-                              const newLines = [...matchingLines];
-                              newLines[idx].right = e.target.value;
-                              setMatchingLines(newLines);
-                              const combined = newLines.map(l => `${l.left} || ${l.right}`).join('\n');
-                              setQOptionsText(combined);
-                              setQCorrectAnsText(newLines.map((_, i) => i).join(','));
-                              setTimeout(() => handlePreviewQuestion(), 50);
-                            }}
-                            placeholder="Cột Phải B (đúng)..."
-                            className="flex-1 p-2 border border-slate-100 rounded-lg text-xs font-bold bg-slate-50 focus:bg-white outline-none"
-                          />
-                          {matchingLines.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const newLines = matchingLines.filter((_, i) => i !== idx);
-                                setMatchingLines(newLines);
-                                const combined = newLines.map(l => `${l.left} || ${l.right}`).join('\n');
-                                setQOptionsText(combined);
-                                setQCorrectAnsText(newLines.map((_, i) => i).join(','));
-                                setTimeout(() => handlePreviewQuestion(), 50);
-                              }}
-                              className="w-7 h-7 rounded-lg border bg-rose-50 hover:bg-rose-100 text-rose-500 flex items-center justify-center text-sm font-bold shadow-sm transition-all"
-                            >
-                              &times;
-                            </button>
-                          )}
+                        <div key={idx} className="flex flex-col gap-3 bg-white p-4 border-2 border-slate-200 hover:border-indigo-200 rounded-2xl shadow-sm transition-colors relative group">
+                          <div className="flex justify-between items-center">
+                            <span className="text-[11px] font-black text-slate-500 uppercase flex items-center gap-1.5">
+                              <div className="w-5 h-5 rounded bg-slate-100 flex items-center justify-center text-slate-600">{idx + 1}</div>
+                              Cặp ghép
+                            </span>
+                            {matchingLines.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const newLines = matchingLines.filter((_, i) => i !== idx);
+                                  setMatchingLines(newLines);
+                                  const combined = newLines.map(l => `${l.left} || ${l.right}`).join('\n');
+                                  setQOptionsText(combined);
+                                  setQCorrectAnsText(newLines.map((_, i) => i).join(','));
+                                  setTimeout(() => handlePreviewQuestion(), 50);
+                                }}
+                                className="text-rose-500 hover:bg-rose-50 p-1.5 rounded-lg transition-colors flex items-center gap-1 text-[11px] font-bold"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" /> Xóa
+                              </button>
+                            )}
+                          </div>
+                          <div className="flex flex-col md:flex-row items-center gap-3">
+                            <div className="w-full">
+                              <input
+                                type="text"
+                                value={line.left}
+                                onChange={(e) => {
+                                  const newLines = [...matchingLines];
+                                  newLines[idx].left = e.target.value;
+                                  setMatchingLines(newLines);
+                                  const combined = newLines.map(l => `${l.left} || ${l.right}`).join('\n');
+                                  setQOptionsText(combined);
+                                  setQCorrectAnsText(newLines.map((_, i) => i).join(','));
+                                  setTimeout(() => handlePreviewQuestion(), 50);
+                                }}
+                                placeholder="Vế trái (Ví dụ: CPU)"
+                                className="w-full p-2.5 border-2 border-slate-100 rounded-xl text-sm font-semibold bg-slate-50 focus:bg-white focus:border-indigo-300 outline-none transition-all"
+                              />
+                            </div>
+                            <div className="flex-shrink-0 text-slate-300 md:rotate-0 rotate-90">
+                              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 16V4M7 4L3 8M7 4L11 8M17 8v12M17 20l-4-4M17 20l4-4"/></svg>
+                            </div>
+                            <div className="w-full">
+                              <input
+                                type="text"
+                                value={line.right}
+                                onChange={(e) => {
+                                  const newLines = [...matchingLines];
+                                  newLines[idx].right = e.target.value;
+                                  setMatchingLines(newLines);
+                                  const combined = newLines.map(l => `${l.left} || ${l.right}`).join('\n');
+                                  setQOptionsText(combined);
+                                  setQCorrectAnsText(newLines.map((_, i) => i).join(','));
+                                  setTimeout(() => handlePreviewQuestion(), 50);
+                                }}
+                                placeholder="Vế phải (Ví dụ: Bộ xử lý trung tâm)"
+                                className="w-full p-2.5 border-2 border-slate-100 rounded-xl text-sm font-semibold bg-slate-50 focus:bg-white focus:border-emerald-300 outline-none transition-all"
+                              />
+                            </div>
+                          </div>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {(qType === QuestionType.DRAG_DROP || qType === QuestionType.DROPDOWN || qType === QuestionType.FILL_BLANK) && (
-                  <div className="space-y-4 p-4 bg-slate-50 border border-slate-200 rounded-2xl shadow-sm">
-                    <span className="block text-[10px] font-black text-indigo-700 uppercase">Cấu hình chỗ trống & Lựa chọn</span>
-                    
-                    <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-xl text-[10px] leading-normal font-semibold text-indigo-800">
-                      {qType === QuestionType.DRAG_DROP && (
-                        <p>💡 Hãy chèn các ký tự <strong>[blank0]</strong>, <strong>[blank1]</strong>... vào nội dung đề bài phía trên để làm chỗ trống kéo thả.</p>
-                      )}
-                      {qType === QuestionType.DROPDOWN && (
-                        <p>💡 Hãy chèn các ký tự <strong>[drop0]</strong>, <strong>[drop1]</strong>... vào nội dung đề bài phía trên để làm ô lựa chọn thả xuống.</p>
-                      )}
-                      {qType === QuestionType.FILL_BLANK && (
-                        <p>💡 Gõ từ khóa đáp án đúng được chấp nhận bên dưới (nhiều đáp án cách nhau bằng dấu phẩy).</p>
-                      )}
+                {qType === QuestionType.TRUE_FALSE_MULTIPLE && (
+                  <div className="space-y-4 p-5 bg-slate-50 border border-slate-200 rounded-3xl shadow-sm">
+                    <div className="flex justify-between items-center pb-2 border-b border-slate-200">
+                      <div>
+                        <label className="block text-[11px] font-black text-indigo-700 uppercase">Cấu hình các phát biểu (True/False Multiple)</label>
+                        <span className="text-[10px] text-slate-400 font-bold block mt-0.5">
+                          Thêm các phát biểu và chọn Đúng/Sai cho từng phát biểu.
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTfmStatements([...tfmStatements, { text: '', isTrue: true }]);
+                        }}
+                        className="text-[11px] py-1.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl shadow-sm transition-all flex items-center gap-1"
+                      >
+                        <Plus className="w-4 h-4" /> Thêm Phát biểu
+                      </button>
                     </div>
-
-                    {qType === QuestionType.DRAG_DROP && (() => {
-                      const blankMatches = Array.from(qContent.matchAll(/\[blank\d+\]/g)).map(m => m[0]);
-                      const correctAnswers = qCorrectAnsText.split(',').map(s => s.trim());
-                      
-                      return (
-                        <div className="space-y-3">
-                          {blankMatches.length === 0 ? (
-                            <p className="text-[10px] font-bold text-amber-600 italic">⚠️ Đề bài chưa chứa ký tự [blank0]. Hãy chèn vào nội dung đề bài phía trên!</p>
-                          ) : (
-                            <div className="space-y-2">
-                              <span className="block text-[9px] font-bold text-slate-500 uppercase">Đáp án đúng cho từng chỗ trống:</span>
-                              {blankMatches.map((blank, bIdx) => (
-                                <div key={bIdx} className="flex items-center gap-2 bg-white p-2 border border-slate-200 rounded-xl">
-                                  <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded">{blank}</span>
-                                  <input
-                                    type="text"
-                                    value={correctAnswers[bIdx] || ''}
-                                    onChange={(e) => {
-                                      const newAnswers = [...correctAnswers];
-                                      while (newAnswers.length < blankMatches.length) newAnswers.push('');
-                                      newAnswers[bIdx] = e.target.value;
-                                      
-                                      setQCorrectAnsText(newAnswers.slice(0, blankMatches.length).join(','));
-                                      const sections = qOptionsText.split('LỰA CHỌN:');
-                                      const choices = sections[1] ? sections[1].trim() : '';
-                                      setQOptionsText(`VĂN BẢN:\n${qContent}\n\nLỰA CHỌN:\n${choices}`);
-                                      setTimeout(() => handlePreviewQuestion(), 50);
-                                    }}
-                                    placeholder="Nhập chữ/từ đúng cho vị trí này..."
-                                    className="flex-1 p-1.5 border border-slate-200 rounded text-xs font-bold bg-slate-50 outline-none"
-                                  />
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
-                          <div className="space-y-1">
-                            <label className="block text-[9px] font-black text-slate-500 uppercase">Danh sách tất cả các từ lựa chọn hiển thị (bao gồm cả đáp án đúng và gây nhiễu, mỗi từ một dòng):</label>
-                            <textarea
-                              value={(() => {
-                                const sections = qOptionsText.split('LỰA CHỌN:');
-                                return sections[1] ? sections[1].trim() : '';
-                              })()}
+                    <div className="space-y-3">
+                      {tfmStatements.map((stmt, idx) => (
+                        <div key={idx} className="flex flex-col md:flex-row gap-3 bg-white p-4 border-2 border-slate-200 hover:border-indigo-200 rounded-2xl shadow-sm transition-colors relative group">
+                          <div className="flex-1">
+                            <input
+                              type="text"
+                              value={stmt.text}
                               onChange={(e) => {
-                                setQOptionsText(`VĂN BẢN:\n${qContent}\n\nLỰA CHỌN:\n${e.target.value}`);
+                                const newStmts = [...tfmStatements];
+                                newStmts[idx].text = e.target.value;
+                                setTfmStatements(newStmts);
                                 setTimeout(() => handlePreviewQuestion(), 50);
                               }}
-                              placeholder="Gõ mỗi từ lựa chọn 1 dòng..."
-                              rows={3}
-                              className="w-full p-2.5 border border-slate-200 rounded-xl text-xs bg-white font-mono outline-none"
+                              placeholder={`Nội dung phát biểu ${idx + 1}...`}
+                              className="w-full p-2.5 border-2 border-slate-100 rounded-xl text-sm font-semibold bg-slate-50 focus:bg-white focus:border-indigo-300 outline-none transition-all"
                             />
                           </div>
-                        </div>
-                      );
-                    })()}
-
-                    {qType === QuestionType.DROPDOWN && (() => {
-                      const dropMatches = Array.from(qContent.matchAll(/\[drop\d+\]/g)).map(m => m[0]);
-                      const correctAnswers = qCorrectAnsText.split(',').map(s => s.trim());
-                      
-                      const sections = qOptionsText.split('LỰA CHỌN:');
-                      const choicesLines = sections[1] ? sections[1].trim().split('\n') : [];
-
-                      return (
-                        <div className="space-y-3">
-                          {dropMatches.length === 0 ? (
-                            <p className="text-[10px] font-bold text-amber-600 italic">⚠️ Đề bài chưa chứa ký tự [drop0]. Hãy chèn vào nội dung đề bài phía trên!</p>
-                          ) : (
-                            <div className="space-y-3">
-                              {dropMatches.map((drop, dIdx) => (
-                                <div key={dIdx} className="bg-white p-3 border border-slate-200 rounded-xl space-y-2">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded">{drop}</span>
-                                    <span className="text-[9px] font-bold text-slate-400">Dropdown số {dIdx + 1}</span>
-                                  </div>
-                                  
-                                  <div>
-                                    <label className="block text-[9px] font-black text-slate-500 uppercase mb-1">Các lựa chọn ngăn cách bởi dấu phẩy:</label>
-                                    <input
-                                      type="text"
-                                      value={choicesLines[dIdx] || ''}
-                                      onChange={(e) => {
-                                        const newLines = [...choicesLines];
-                                        while (newLines.length < dropMatches.length) newLines.push('');
-                                        newLines[dIdx] = e.target.value;
-                                        
-                                        setQOptionsText(`VĂN BẢN:\n${qContent}\n\nLỰA CHỌN:\n${newLines.slice(0, dropMatches.length).join('\n')}`);
-                                        setTimeout(() => handlePreviewQuestion(), 50);
-                                      }}
-                                      placeholder="Ví dụ: Táo, Cam, Chuối"
-                                      className="w-full p-1.5 border border-slate-200 rounded text-xs font-bold bg-slate-50 outline-none"
-                                    />
-                                  </div>
-
-                                  <div>
-                                    <label className="block text-[9px] font-black text-slate-500 uppercase mb-1">Đáp án đúng tương ứng:</label>
-                                    <input
-                                      type="text"
-                                      value={correctAnswers[dIdx] || ''}
-                                      onChange={(e) => {
-                                        const newAnswers = [...correctAnswers];
-                                        while (newAnswers.length < dropMatches.length) newAnswers.push('');
-                                        newAnswers[dIdx] = e.target.value;
-                                        
-                                        setQCorrectAnsText(newAnswers.slice(0, dropMatches.length).join(','));
-                                        setQOptionsText(`VĂN BẢN:\n${qContent}\n\nLỰA CHỌN:\n${choicesLines.slice(0, dropMatches.length).join('\n')}`);
-                                        setTimeout(() => handlePreviewQuestion(), 50);
-                                      }}
-                                      placeholder="Phải khớp hoàn toàn với một trong các lựa chọn trên..."
-                                      className="w-full p-1.5 border border-slate-200 rounded text-xs font-bold bg-slate-50 outline-none"
-                                    />
-                                  </div>
-                                </div>
-                              ))}
+                          <div className="flex items-center gap-3">
+                            <div className="flex gap-2">
+                              <label className={`flex items-center gap-1 px-3 py-1.5 rounded-lg border-2 cursor-pointer transition-colors ${stmt.isTrue ? 'bg-indigo-50 border-indigo-400 text-indigo-700 font-bold' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'}`}>
+                                <input
+                                  type="radio"
+                                  name={`tfm_${idx}`}
+                                  checked={stmt.isTrue}
+                                  onChange={() => {
+                                    const newStmts = [...tfmStatements];
+                                    newStmts[idx].isTrue = true;
+                                    setTfmStatements(newStmts);
+                                    setTimeout(() => handlePreviewQuestion(), 50);
+                                  }}
+                                  className="hidden"
+                                />
+                                Đúng
+                              </label>
+                              <label className={`flex items-center gap-1 px-3 py-1.5 rounded-lg border-2 cursor-pointer transition-colors ${!stmt.isTrue ? 'bg-indigo-50 border-indigo-400 text-indigo-700 font-bold' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'}`}>
+                                <input
+                                  type="radio"
+                                  name={`tfm_${idx}`}
+                                  checked={!stmt.isTrue}
+                                  onChange={() => {
+                                    const newStmts = [...tfmStatements];
+                                    newStmts[idx].isTrue = false;
+                                    setTfmStatements(newStmts);
+                                    setTimeout(() => handlePreviewQuestion(), 50);
+                                  }}
+                                  className="hidden"
+                                />
+                                Sai
+                              </label>
                             </div>
-                          )}
+                            {tfmStatements.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const newStmts = tfmStatements.filter((_, i) => i !== idx);
+                                  setTfmStatements(newStmts);
+                                  setTimeout(() => handlePreviewQuestion(), 50);
+                                }}
+                                className="text-slate-400 hover:text-rose-500 p-1.5 transition-colors"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
                         </div>
-                      );
-                    })()}
+                      ))}
+                    </div>
+                  </div>
+                )}
 
-                    {qType === QuestionType.FILL_BLANK && (
-                      <div className="space-y-1">
-                        <label className="block text-[9px] font-black text-slate-500 uppercase mb-1">Các từ khóa đáp án đúng được chấp nhận (cách nhau bởi dấu phẩy):</label>
+                {qType === QuestionType.VIDEO_BASED && (
+                  <div className="space-y-4 p-5 bg-slate-50 border border-slate-200 rounded-3xl shadow-sm">
+                    <div>
+                      <label className="block text-[11px] font-black text-indigo-700 uppercase mb-2">Cấu hình Video</label>
+                      <div className="space-y-3">
                         <input
                           type="text"
-                          value={qCorrectAnsText}
-                          onChange={(e) => {
-                            setQCorrectAnsText(e.target.value);
-                            setTimeout(() => handlePreviewQuestion(), 50);
-                          }}
-                          placeholder="Ví dụ: CPU, bộ xử lý trung tâm, vi xử lý"
-                          className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold bg-white outline-none"
+                          value={videoUrl}
+                          onChange={(e) => setVideoUrl(e.target.value)}
+                          placeholder="Video URL (YouTube, MP4...)"
+                          className="w-full p-2.5 border-2 border-slate-200 rounded-xl text-sm font-semibold bg-white outline-none"
                         />
+                        <div className="flex gap-3">
+                          <input
+                            type="text"
+                            value={videoTitle}
+                            onChange={(e) => setVideoTitle(e.target.value)}
+                            placeholder="Tiêu đề video (Tùy chọn)"
+                            className="flex-1 p-2.5 border-2 border-slate-200 rounded-xl text-sm font-semibold bg-white outline-none"
+                          />
+                          <input
+                            type="text"
+                            value={videoDuration}
+                            onChange={(e) => setVideoDuration(e.target.value)}
+                            placeholder="Thời lượng (vd: 2:30)"
+                            className="w-1/3 p-2.5 border-2 border-slate-200 rounded-xl text-sm font-semibold bg-white outline-none"
+                          />
+                        </div>
                       </div>
-                    )}
+                    </div>
+                    <div className="pt-3 border-t border-slate-200">
+                      <label className="flex items-center gap-2 text-sm font-bold text-slate-700 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={isVideoMrq}
+                          onChange={(e) => setIsVideoMrq(e.target.checked)}
+                          className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                        />
+                        Cho phép chọn nhiều đáp án (Multiple Response)
+                      </label>
+                    </div>
+                    <div className="pt-2">
+                      <label className="block text-[11px] font-black text-indigo-700 uppercase mb-2">Các lựa chọn đáp án</label>
+                      <div className="space-y-2">
+                        {mcqOpts.map((opt, idx) => {
+                          const letter = String.fromCharCode(65 + idx);
+                          let isSelected = false;
+                          if (isVideoMrq) {
+                            const selectedIndices = qCorrectAnsText.split(',').map(s => s.trim()).filter(Boolean);
+                            isSelected = selectedIndices.includes(String(idx));
+                          } else {
+                            isSelected = qCorrectAnsText.trim() === String(idx);
+                          }
+
+                          return (
+                            <div key={idx} className="flex items-center gap-2 bg-white p-2 border-2 border-slate-200 rounded-xl shadow-sm transition-colors hover:border-indigo-200 group">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (isVideoMrq) {
+                                    let selected = qCorrectAnsText.split(',').map(s => s.trim()).filter(Boolean);
+                                    if (selected.includes(String(idx))) {
+                                      selected = selected.filter(s => s !== String(idx));
+                                    } else {
+                                      selected.push(String(idx));
+                                    }
+                                    setQCorrectAnsText(selected.join(','));
+                                  } else {
+                                    setQCorrectAnsText(String(idx));
+                                  }
+                                  setTimeout(() => handlePreviewQuestion(), 50);
+                                }}
+                                className={`w-7 h-7 rounded-lg flex items-center justify-center font-black text-xs transition-colors shadow-inner flex-shrink-0
+                                  ${isSelected 
+                                    ? 'bg-indigo-600 text-white border border-indigo-700 ring-2 ring-indigo-200' 
+                                    : 'bg-slate-100 text-slate-400 border border-slate-300 group-hover:bg-slate-200'
+                                  }`}
+                              >
+                                {letter}
+                              </button>
+                              <input
+                                type="text"
+                                value={opt}
+                                onChange={(e) => {
+                                  const newOpts = [...mcqOpts];
+                                  newOpts[idx] = e.target.value;
+                                  setMcqOpts(newOpts);
+                                  setTimeout(() => handlePreviewQuestion(), 50);
+                                }}
+                                placeholder={`Lựa chọn ${letter}...`}
+                                className="flex-1 p-2 border border-transparent hover:border-slate-100 focus:border-indigo-200 rounded-lg text-sm font-bold bg-transparent outline-none transition-colors"
+                              />
+                              {mcqOpts.length > 2 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const newOpts = mcqOpts.filter((_, i) => i !== idx);
+                                    setMcqOpts(newOpts);
+                                    setTimeout(() => handlePreviewQuestion(), 50);
+                                  }}
+                                  className="text-slate-300 hover:text-rose-500 p-1.5 transition-colors"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMcqOpts([...mcqOpts, '']);
+                        }}
+                        className="mt-3 text-[10px] py-1.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-lg shadow-sm transition-all flex items-center gap-1"
+                      >
+                        <Plus className="w-3.5 h-3.5" /> Thêm Đáp Án
+                      </button>
+                    </div>
                   </div>
                 )}
 
                 {qType === QuestionType.SEQUENCE && (
-                  <div className="space-y-3 p-4 bg-slate-50 border border-slate-200 rounded-2xl shadow-sm">
-                    <div className="flex justify-between items-center">
-                      <label className="block text-[10px] font-black text-indigo-700 uppercase">Sắp xếp các bước theo THỰ TỰ ĐÚNG</label>
+                  <div className="space-y-4 p-5 bg-slate-50 border border-slate-200 rounded-3xl shadow-sm">
+                    <div className="flex justify-between items-center pb-2 border-b border-slate-200">
+                      <div>
+                        <label className="block text-[11px] font-black text-indigo-700 uppercase">Sắp xếp các bước theo THỰ TỰ ĐÚNG</label>
+                        <span className="text-[10px] text-slate-400 font-bold block mt-0.5">
+                          Nhập các bước hành động đúng theo trình tự từ trước đến sau.
+                        </span>
+                      </div>
                       <button
                         type="button"
                         onClick={() => {
@@ -2831,19 +2944,49 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                           });
                           setQCorrectAnsText(correctMap.join(','));
                         }}
-                        className="text-[10px] py-1 px-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-lg shadow transition-all flex items-center gap-1"
+                        className="text-[11px] py-1.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl shadow-sm transition-all flex items-center gap-1"
                       >
-                        + Thêm Bước
+                        <Plus className="w-4 h-4" /> Thêm Bước
                       </button>
                     </div>
-                    <p className="text-[9px] font-semibold text-indigo-800 leading-normal bg-indigo-50 p-2 rounded-lg">
-                      💡 Nhập các bước hành động đúng theo trình tự từ trước đến sau. Hệ thống sẽ tự động xáo trộn ngẫu nhiên khi lưu và tính toán bộ đáp án đúng để phân tích.
-                    </p>
 
                     <div className="space-y-2">
                       {sequenceSteps.map((step, idx) => (
-                        <div key={idx} className="flex items-center gap-2 bg-white p-2 border border-slate-200 rounded-xl shadow-sm">
-                          <span className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px] font-black">
+                        <div 
+                          key={idx}
+                          draggable
+                          onDragStart={(e) => {
+                            e.dataTransfer.setData('text/plain', idx.toString());
+                            e.dataTransfer.effectAllowed = 'move';
+                          }}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            const fromIdx = parseInt(e.dataTransfer.getData('text/plain'));
+                            const toIdx = idx;
+                            if (fromIdx === toIdx || isNaN(fromIdx)) return;
+
+                            const newSteps = [...sequenceSteps];
+                            const [movedItem] = newSteps.splice(fromIdx, 1);
+                            newSteps.splice(toIdx, 0, movedItem);
+
+                            setSequenceSteps(newSteps);
+                            const filtered = newSteps.filter(Boolean);
+                            const indexed = filtered.map((text, sIdx) => ({ text, originalIdx: sIdx }));
+                            const shuffled = [...indexed].sort(() => Math.random() - 0.5);
+                            setQOptionsText(shuffled.map(s => s.text).join('\n'));
+                            const correctMap = indexed.map(origItem => {
+                              return shuffled.findIndex(shufItem => shufItem.originalIdx === origItem.originalIdx);
+                            });
+                            setQCorrectAnsText(correctMap.join(','));
+                            setTimeout(() => handlePreviewQuestion(), 50);
+                          }}
+                          className="flex items-center gap-3 bg-white p-3 border-2 border-slate-200 hover:border-indigo-300 rounded-2xl shadow-sm transition-colors cursor-grab active:cursor-grabbing group"
+                        >
+                          <div className="text-slate-400 group-hover:text-indigo-500 transition-colors">
+                            <GripVertical className="w-5 h-5" />
+                          </div>
+                          <span className="w-6 h-6 rounded-md bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-black flex-shrink-0">
                             {idx + 1}
                           </span>
                           <input
@@ -2865,7 +3008,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                               setTimeout(() => handlePreviewQuestion(), 50);
                             }}
                             placeholder={`Nội dung bước ${idx + 1}...`}
-                            className="flex-1 p-2 border border-slate-100 rounded-lg text-xs font-bold bg-slate-50 focus:bg-white outline-none"
+                            className="flex-1 p-2 border-2 border-transparent hover:border-slate-100 focus:border-indigo-200 rounded-xl text-sm font-bold bg-transparent outline-none transition-colors"
                           />
                           {sequenceSteps.length > 1 && (
                             <button
@@ -2884,9 +3027,9 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                                 setQCorrectAnsText(correctMap.join(','));
                                 setTimeout(() => handlePreviewQuestion(), 50);
                               }}
-                              className="w-7 h-7 rounded-lg border bg-rose-50 hover:bg-rose-100 text-rose-500 flex items-center justify-center text-sm font-bold shadow-sm transition-all"
+                              className="text-slate-400 hover:text-rose-500 p-1.5 transition-colors"
                             >
-                              &times;
+                              <Trash2 className="w-4 h-4" />
                             </button>
                           )}
                         </div>
@@ -2895,115 +3038,8 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                   </div>
                 )}
 
-                {qType === QuestionType.HOTSPOT && (
-                  <div className="space-y-3 p-4 bg-slate-50 border border-slate-200 rounded-2xl shadow-sm">
-                    <span className="block text-[10px] font-black text-indigo-700 uppercase">Cấu hình Hotspot trực quan</span>
-                    <p className="text-[10px] text-slate-500 leading-normal font-bold">
-                      ⚡ <strong>Hướng dẫn:</strong> Bấm chuột trực tiếp lên vị trí bất kỳ trên ảnh demo phía dưới để đặt làm tọa độ đáp án đúng, sau đó dùng thanh trượt để chỉnh độ rộng khu vực đúng (bán kính R).
-                    </p>
-
-                    <div className="grid grid-cols-3 gap-2">
-                      <div>
-                        <label className="block text-[9px] font-bold text-slate-400">Tọa độ X (%)</label>
-                        <input
-                          type="number"
-                          value={hotspotCoords.x}
-                          onChange={(e) => {
-                            const val = Math.min(100, Math.max(0, parseInt(e.target.value) || 0));
-                            const newCoords = { ...hotspotCoords, x: val };
-                            setHotspotCoords(newCoords);
-                            setQCorrectAnsText(`${val},${hotspotCoords.y},${hotspotCoords.r}`);
-                            setTimeout(() => handlePreviewQuestion(), 50);
-                          }}
-                          className="w-full p-1.5 border border-slate-200 rounded text-xs font-extrabold"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[9px] font-bold text-slate-400">Tọa độ Y (%)</label>
-                        <input
-                          type="number"
-                          value={hotspotCoords.y}
-                          onChange={(e) => {
-                            const val = Math.min(100, Math.max(0, parseInt(e.target.value) || 0));
-                            const newCoords = { ...hotspotCoords, y: val };
-                            setHotspotCoords(newCoords);
-                            setQCorrectAnsText(`${hotspotCoords.x},${val},${hotspotCoords.r}`);
-                            setTimeout(() => handlePreviewQuestion(), 50);
-                          }}
-                          className="w-full p-1.5 border border-slate-200 rounded text-xs font-extrabold"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[9px] font-bold text-slate-400">Bán kính R (%)</label>
-                        <input
-                          type="number"
-                          value={hotspotCoords.r}
-                          onChange={(e) => {
-                            const val = Math.min(50, Math.max(2, parseInt(e.target.value) || 10));
-                            const newCoords = { ...hotspotCoords, r: val };
-                            setHotspotCoords(newCoords);
-                            setQCorrectAnsText(`${hotspotCoords.x},${hotspotCoords.y},${val}`);
-                            setTimeout(() => handlePreviewQuestion(), 50);
-                          }}
-                          className="w-full p-1.5 border border-slate-200 rounded text-xs font-extrabold"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <span className="text-[9px] font-black text-slate-500">Bán kính:</span>
-                      <input
-                        type="range"
-                        min="3"
-                        max="30"
-                        value={hotspotCoords.r}
-                        onChange={(e) => {
-                          const val = parseInt(e.target.value);
-                          const newCoords = { ...hotspotCoords, r: val };
-                          setHotspotCoords(newCoords);
-                          setQCorrectAnsText(`${hotspotCoords.x},${hotspotCoords.y},${val}`);
-                          setTimeout(() => handlePreviewQuestion(), 50);
-                        }}
-                        className="flex-1 accent-indigo-600 h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer"
-                      />
-                    </div>
-
-                    <div 
-                      className="relative overflow-hidden rounded-xl border border-slate-200 bg-slate-100 max-w-full h-auto cursor-crosshair shadow"
-                      onClick={(e) => {
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        const clickX = Math.round(((e.clientX - rect.left) / rect.width) * 100);
-                        const clickY = Math.round(((e.clientY - rect.top) / rect.height) * 100);
-                        const newCoords = { ...hotspotCoords, x: clickX, y: clickY };
-                        setHotspotCoords(newCoords);
-                        setQCorrectAnsText(`${clickX},${clickY},${hotspotCoords.r}`);
-                        setTimeout(() => handlePreviewQuestion(), 50);
-                      }}
-                    >
-                      <img
-                        src={qImage || "https://picsum.photos/seed/ic3screen/800/450"}
-                        alt="Preview area"
-                        className="w-full h-auto object-contain select-none pointer-events-none"
-                        referrerPolicy="no-referrer"
-                      />
-                      <div 
-                        className="absolute border-4 border-dashed border-rose-500 bg-rose-500/20 rounded-full flex items-center justify-center pointer-events-none"
-                        style={{ 
-                          left: `${hotspotCoords.x}%`, 
-                          top: `${hotspotCoords.y}%`, 
-                          width: `${hotspotCoords.r * 2}%`, 
-                          height: `${hotspotCoords.r * 2}%`,
-                          marginLeft: `-${hotspotCoords.r}%`,
-                          marginTop: `-${hotspotCoords.r}%`
-                        }}
-                      >
-                        <span className="text-[8px] bg-rose-600 text-white px-1 py-0.5 rounded shadow font-bold">MỤC TIÊU</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {!['multiple_choice', 'multiple_response', 'image_based', 'scenario', 'true_false', 'matching', 'sequence', 'drag_drop', 'dropdown', 'fill_blank'].includes(qType) && (
+                {/* Fallback field - only for unsupported types if any */}
+                {!['multiple_choice', 'multiple_response', 'true_false', 'matching', 'sequence', 'true_false_multiple', 'video_based'].includes(qType) && (
                   <div className="space-y-1">
                     <label className="block text-[10px] font-black text-slate-500 uppercase">Đáp án đúng cấu hình:</label>
                     <input
@@ -3409,86 +3445,6 @@ Hãy nhấp vào biểu tượng Save trên thanh công cụ.`);
                               </select>
                             </div>
 
-                            {/* CẤU HÌNH ĐÁP ÁN ĐỐI VỚI HOTSPOT */}
-                            {draftParsedQuestion.type === QuestionType.HOTSPOT && (
-                              <div className="space-y-2 border-t pt-2 mt-2">
-                                <label className="block text-[9px] font-bold text-slate-400 uppercase">Cấu hình tọa độ Hotspot mục tiêu</label>
-                                <div className="text-[9px] text-indigo-600 font-bold bg-indigo-50 p-2 rounded">
-                                  Mẹo: Click chuột trực tiếp vào đúng vị trí mong muốn trên ảnh xem trước bên dưới để tự động lấy tọa độ x, y!
-                                </div>
-                                <div 
-                                  className="relative overflow-hidden rounded-lg border-2 border-dashed bg-slate-100 cursor-crosshair max-w-xs mx-auto"
-                                  onClick={(e) => {
-                                    const rect = e.currentTarget.getBoundingClientRect();
-                                    const clickX = Math.round(((e.clientX - rect.left) / rect.width) * 100);
-                                    const clickY = Math.round(((e.clientY - rect.top) / rect.height) * 100);
-                                    const curCorr = draftParsedQuestion.correctAnswer || { x: 50, y: 50, radius: 10 };
-                                    setDraftParsedQuestion({
-                                      ...draftParsedQuestion,
-                                      correctAnswer: { ...curCorr, x: clickX, y: clickY }
-                                    });
-                                  }}
-                                >
-                                  <img 
-                                    src={draftParsedQuestion.imageUrl || "https://picsum.photos/seed/ic3screen/800/450"} 
-                                    className="w-full h-auto object-contain pointer-events-none select-none"
-                                    alt="Hotspot preview"
-                                  />
-                                  {draftParsedQuestion.correctAnswer && (
-                                    <div 
-                                      className="absolute border-2 border-indigo-600 bg-indigo-500/30 rounded-full flex items-center justify-center pointer-events-none"
-                                      style={{
-                                        left: `${draftParsedQuestion.correctAnswer.x}%`,
-                                        top: `${draftParsedQuestion.correctAnswer.y}%`,
-                                        width: `${(draftParsedQuestion.correctAnswer.radius || 10) * 2}%`,
-                                        height: `${(draftParsedQuestion.correctAnswer.radius || 10) * 2}%`,
-                                        marginLeft: `-${draftParsedQuestion.correctAnswer.radius || 10}%`,
-                                        marginTop: `-${draftParsedQuestion.correctAnswer.radius || 10}%`,
-                                      }}
-                                    />
-                                  )}
-                                </div>
-                                <div className="grid grid-cols-3 gap-2">
-                                  <div>
-                                    <label className="block text-[8px] font-bold text-slate-400 uppercase">Tọa độ X (%)</label>
-                                    <input 
-                                      type="number" 
-                                      value={draftParsedQuestion.correctAnswer?.x || 50} 
-                                      onChange={(e) => setDraftParsedQuestion({
-                                        ...draftParsedQuestion,
-                                        correctAnswer: { ...(draftParsedQuestion.correctAnswer || { x: 50, y: 50, radius: 10 }), x: parseInt(e.target.value) }
-                                      })}
-                                      className="w-full p-1.5 border rounded text-xs bg-slate-50 font-bold"
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="block text-[8px] font-bold text-slate-400 uppercase">Tọa độ Y (%)</label>
-                                    <input 
-                                      type="number" 
-                                      value={draftParsedQuestion.correctAnswer?.y || 50} 
-                                      onChange={(e) => setDraftParsedQuestion({
-                                        ...draftParsedQuestion,
-                                        correctAnswer: { ...(draftParsedQuestion.correctAnswer || { x: 50, y: 50, radius: 10 }), y: parseInt(e.target.value) }
-                                      })}
-                                      className="w-full p-1.5 border rounded text-xs bg-slate-50 font-bold"
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="block text-[8px] font-bold text-slate-400 uppercase">Bán kính R (%)</label>
-                                    <input 
-                                      type="number" 
-                                      value={draftParsedQuestion.correctAnswer?.radius || 10} 
-                                      onChange={(e) => setDraftParsedQuestion({
-                                        ...draftParsedQuestion,
-                                        correctAnswer: { ...(draftParsedQuestion.correctAnswer || { x: 50, y: 50, radius: 10 }), radius: parseInt(e.target.value) }
-                                      })}
-                                      className="w-full p-1.5 border rounded text-xs bg-slate-50 font-bold"
-                                    />
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-
                             {/* CẤU HÌNH LỰA CHỌN MẢNG ĐỐI VỚI MCQ/MR/SEQUENCE */}
                             {(draftParsedQuestion.type === QuestionType.MULTIPLE_CHOICE || 
                               draftParsedQuestion.type === QuestionType.MULTIPLE_RESPONSE || 
@@ -3508,38 +3464,34 @@ Hãy nhấp vào biểu tượng Save trên thanh công cụ.`);
                             )}
 
                             {/* CẤU HÌNH ĐÁP ÁN ĐÚNG THÔNG THƯỜNG */}
-                            {draftParsedQuestion.type !== QuestionType.HOTSPOT && (
-                              <div>
-                                <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Đáp án đúng</label>
-                                <input
-                                  type="text"
-                                  value={
-                                    Array.isArray(draftParsedQuestion.correctAnswer) 
-                                      ? draftParsedQuestion.correctAnswer.join(',') 
-                                      : draftParsedQuestion.correctAnswer?.toString() || ''
+                            <div>
+                              <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Đáp án đúng</label>
+                              <input
+                                type="text"
+                                value={
+                                  Array.isArray(draftParsedQuestion.correctAnswer) 
+                                    ? draftParsedQuestion.correctAnswer.join(',') 
+                                    : draftParsedQuestion.correctAnswer?.toString() || ''
+                                }
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  let finalAns: any = val;
+                                  if (draftParsedQuestion.type === QuestionType.MULTIPLE_CHOICE) {
+                                    finalAns = parseInt(val);
+                                  } else if (draftParsedQuestion.type === QuestionType.MULTIPLE_RESPONSE || draftParsedQuestion.type === QuestionType.SEQUENCE) {
+                                    finalAns = val.split(',').map(n => parseInt(n.trim()));
+                                  } else if (draftParsedQuestion.type === QuestionType.TRUE_FALSE) {
+                                    finalAns = val.toLowerCase() === 'đúng' || val === 'true';
                                   }
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    let finalAns: any = val;
-                                    if (draftParsedQuestion.type === QuestionType.MULTIPLE_CHOICE) {
-                                      finalAns = parseInt(val);
-                                    } else if (draftParsedQuestion.type === QuestionType.MULTIPLE_RESPONSE || draftParsedQuestion.type === QuestionType.SEQUENCE) {
-                                      finalAns = val.split(',').map(n => parseInt(n.trim()));
-                                    } else if (draftParsedQuestion.type === QuestionType.TRUE_FALSE) {
-                                      finalAns = val.toLowerCase() === 'đúng' || val === 'true';
-                                    } else if (draftParsedQuestion.type === QuestionType.DRAG_DROP || draftParsedQuestion.type === QuestionType.FILL_BLANK || draftParsedQuestion.type === QuestionType.DROPDOWN) {
-                                      finalAns = val.split(',').map(s => s.trim());
-                                    }
-                                    setDraftParsedQuestion({ ...draftParsedQuestion, correctAnswer: finalAns });
-                                  }}
-                                  placeholder="Nhập chỉ số hoặc từ khóa đáp án..."
-                                  className="w-full p-2 border rounded-lg text-xs font-mono bg-slate-50"
-                                />
-                                <span className="text-[8px] text-slate-400 font-bold mt-0.5 block">
-                                  MCQ: 0-indexed index (0,1,2...). MR/Sequence: mảng index (0,2). True/False: Đúng/Sai.
-                                </span>
-                              </div>
-                            )}
+                                  setDraftParsedQuestion({ ...draftParsedQuestion, correctAnswer: finalAns });
+                                }}
+                                placeholder="Nhập chỉ số hoặc từ khóa đáp án..."
+                                className="w-full p-2 border rounded-lg text-xs font-mono bg-slate-50"
+                              />
+                              <span className="text-[8px] text-slate-400 font-bold mt-0.5 block">
+                                MCQ: 0-indexed index (0,1,2...). MR/Sequence: mảng index (0,2). True/False: Đúng/Sai.
+                              </span>
+                            </div>
 
                             <div>
                               <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Hình ảnh minh họa URL</label>

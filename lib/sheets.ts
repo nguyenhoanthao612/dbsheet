@@ -62,14 +62,11 @@ export function mapSheetQuestionType(typeStr: any): QuestionType {
   if (!typeStr) return QuestionType.MULTIPLE_CHOICE;
   const str = String(typeStr).toLowerCase().replace(/[^a-z0-9]/g, '');
   if (str.includes('multipleresponse') || str.includes('nhiềudápán')) return QuestionType.MULTIPLE_RESPONSE;
+  if (str.includes('truefalsemultiple')) return QuestionType.TRUE_FALSE_MULTIPLE;
   if (str.includes('truefalse') || str.includes('đúngsai') || str.includes('tf')) return QuestionType.TRUE_FALSE;
   if (str.includes('matching') || str.includes('ghépcặp') || str.includes('nối')) return QuestionType.MATCHING;
-  if (str.includes('drag') || str.includes('kếothả')) return QuestionType.DRAG_DROP;
-  if (str.includes('fill') || str.includes('điềnkhuyết') || str.includes('điềnvào')) return QuestionType.FILL_BLANK;
-  if (str.includes('dropdown') || str.includes('danhsáchlựachọn')) return QuestionType.DROPDOWN;
-  if (str.includes('image') || str.includes('hìnhảnh')) return QuestionType.IMAGE_BASED;
-  if (str.includes('scenario') || str.includes('tìnhhuống')) return QuestionType.SCENARIO;
   if (str.includes('sequence') || str.includes('sắpxếp') || str.includes('thứtự')) return QuestionType.SEQUENCE;
+  if (str.includes('video')) return QuestionType.VIDEO_BASED;
   return QuestionType.MULTIPLE_CHOICE;
 }
 
@@ -377,7 +374,7 @@ export async function fetchQuestionsFromGoogleSheet(sheetName: string, testCode:
         }
       }
 
-      if (qType === QuestionType.MULTIPLE_CHOICE || qType === QuestionType.SCENARIO || qType === QuestionType.IMAGE_BASED) {
+      if (qType === QuestionType.MULTIPLE_CHOICE) {
         // Options format: [{"id": "A", "text": "Google Docs"}, ...] or ["Google Docs", ...]
         if (Array.isArray(parsedOptionsJson)) {
           options = parsedOptionsJson.map((o: any) => (o && typeof o === 'object') ? o.text : o);
@@ -488,69 +485,94 @@ export async function fetchQuestionsFromGoogleSheet(sheetName: string, testCode:
           return itemsB.indexOf(originalRight);
         });
       } 
-      else if (qType === QuestionType.DRAG_DROP) {
-        // Options format: {"items": ["...", "..."], "textWithBlanks": "..."}
-        let items: string[] = [];
-        let textWithBlanks = String(q.question || '');
+      else if (qType === QuestionType.TRUE_FALSE_MULTIPLE) {
+        options = legacyOptions;
+        if (Array.isArray(parsedOptionsJson)) {
+          options = parsedOptionsJson.map((o: any) => (o && typeof o === 'object') ? o.text : o);
+        }
+        
+        let correctArray: boolean[] = [];
+        if (Array.isArray(parsedAnswerJson)) {
+          correctArray = parsedAnswerJson.map(val => val === true || String(val).toLowerCase() === 'true' || String(val).toLowerCase() === 'đúng');
+        } else if (typeof parsedAnswerJson === 'string') {
+          correctArray = parsedAnswerJson.split(/[,;\s|]+/).filter(Boolean).map(val => val.toLowerCase() === 'true' || val.toLowerCase() === 'đúng');
+        } else if (answerRaw) {
+          correctArray = answerRaw.split(/[,;\s|]+/).filter(Boolean).map(val => val.toLowerCase() === 'true' || val.toLowerCase() === 'đúng');
+        }
+        
+        // Pad array if needed
+        while (correctArray.length < options.length) correctArray.push(true);
+        correctAnswer = correctArray;
+      }
+      else if (qType === QuestionType.VIDEO_BASED) {
+        let isMrq = false;
+        let videoUrl = '';
+        let videoTitle = '';
+        let videoDuration = '';
+        
         if (parsedOptionsJson && typeof parsedOptionsJson === 'object' && !Array.isArray(parsedOptionsJson)) {
-          items = parsedOptionsJson.items || [];
-          if (parsedOptionsJson.textWithBlanks) {
-            textWithBlanks = parsedOptionsJson.textWithBlanks;
-          }
+          options = parsedOptionsJson.options || [];
+          isMrq = !!parsedOptionsJson.isMultipleResponse;
+          videoUrl = parsedOptionsJson.videoUrl || '';
+          videoTitle = parsedOptionsJson.videoTitle || '';
+          videoDuration = parsedOptionsJson.videoDuration || '';
         } else {
-          items = legacyOptions;
+          options = legacyOptions;
         }
 
-        options = { items, textWithBlanks };
+        options = {
+          options: Array.isArray(options) ? options : [],
+          isMultipleResponse: isMrq,
+          videoUrl,
+          videoTitle,
+          videoDuration
+        };
 
-        // Answer format: ["...", "..."]
-        let correctAnswers: string[] = [];
-        if (Array.isArray(parsedAnswerJson)) {
-          correctAnswers = parsedAnswerJson.map(String);
-        } else if (typeof parsedAnswerJson === 'string') {
-          correctAnswers = parsedAnswerJson.split(/[,;\s|]+/).map(x => x.trim()).filter(Boolean);
-        } else if (answerRaw) {
-          correctAnswers = answerRaw.split(/[,;\s|]+/).map(x => x.trim()).filter(Boolean);
-        }
-        correctAnswer = correctAnswers;
-      } 
-      else if (qType === QuestionType.FILL_BLANK) {
-        options = {};
-        let correctKeywords: string[] = [];
-        if (Array.isArray(parsedAnswerJson)) {
-          correctKeywords = parsedAnswerJson.map(String);
-        } else if (typeof parsedAnswerJson === 'string') {
-          correctKeywords = parsedAnswerJson.split(/[,;|]+/).map(x => x.trim()).filter(Boolean);
-        } else if (answerRaw) {
-          correctKeywords = answerRaw.split(/[,;|]+/).map(x => x.trim()).filter(Boolean);
-        }
-        correctAnswer = correctKeywords;
-      } 
-      else if (qType === QuestionType.DROPDOWN) {
-        // Options format: {"textWithDropdowns": "...", "dropdownOptions": [["...", "..."]]}
-        let textWithDropdowns = String(q.question || '');
-        let dropdownOptions: string[][] = [];
-        if (parsedOptionsJson && typeof parsedOptionsJson === 'object' && !Array.isArray(parsedOptionsJson)) {
-          dropdownOptions = parsedOptionsJson.dropdownOptions || [];
-          if (parsedOptionsJson.textWithDropdowns) {
-            textWithDropdowns = parsedOptionsJson.textWithDropdowns;
+        const ansVal = parsedAnswerJson !== null ? parsedAnswerJson : answerRaw;
+        
+        if (isMrq) {
+          let ansArray: any[] = [];
+          if (Array.isArray(ansVal)) {
+            ansArray = ansVal;
+          } else if (typeof ansVal === 'string') {
+            ansArray = ansVal.split(/[,;\s]+/).map(p => p.trim()).filter(Boolean);
+          } else if (ansVal !== null && ansVal !== undefined) {
+            ansArray = [ansVal];
           }
+
+          const indices: number[] = [];
+          ansArray.forEach(val => {
+            if (typeof val === 'number') {
+              indices.push(val);
+            } else {
+              const sVal = String(val).toUpperCase().trim();
+              if (sVal.length === 1 && sVal >= 'A' && sVal <= 'Z') {
+                indices.push(sVal.charCodeAt(0) - 65);
+              } else if (/^\d+$/.test(sVal)) {
+                indices.push(parseInt(sVal, 10));
+              } else {
+                const foundIdx = (options.options as string[]).findIndex(opt => opt.toLowerCase() === sVal.toLowerCase());
+                if (foundIdx !== -1) indices.push(foundIdx);
+              }
+            }
+          });
+          correctAnswer = indices;
         } else {
-          dropdownOptions = legacyOptions.map(col => col.split(/[,;|]+/).map(x => x.trim()));
+          if (typeof ansVal === 'number') {
+            correctAnswer = ansVal;
+          } else {
+            const sAns = String(ansVal).toUpperCase().trim();
+            if (sAns.length === 1 && sAns >= 'A' && sAns <= 'Z') {
+              correctAnswer = sAns.charCodeAt(0) - 65;
+            } else if (/^\d+$/.test(sAns)) {
+              correctAnswer = parseInt(sAns, 10);
+            } else {
+              const foundIdx = (options.options as string[]).findIndex(opt => opt.toLowerCase() === sAns.toLowerCase());
+              correctAnswer = foundIdx !== -1 ? foundIdx : 0;
+            }
+          }
         }
-
-        options = { textWithDropdowns, dropdownOptions };
-
-        let correctVals: string[] = [];
-        if (Array.isArray(parsedAnswerJson)) {
-          correctVals = parsedAnswerJson.map(String);
-        } else if (typeof parsedAnswerJson === 'string') {
-          correctVals = parsedAnswerJson.split(/[,;|]+/).map(x => x.trim()).filter(Boolean);
-        } else if (answerRaw) {
-          correctVals = answerRaw.split(/[,;|]+/).map(x => x.trim()).filter(Boolean);
-        }
-        correctAnswer = correctVals;
-      } 
+      }
       else if (qType === QuestionType.SEQUENCE) {
         options = legacyOptions;
         if (Array.isArray(parsedOptionsJson)) {
@@ -596,25 +618,6 @@ export async function fetchQuestionsFromGoogleSheet(sheetName: string, testCode:
           correctSeq = options.map((_: any, i: number) => i);
         }
         correctAnswer = correctSeq;
-      }
-      else if (qType === QuestionType.HOTSPOT) {
-        let hotspotVal = { x: 50, y: 50, radius: 10 };
-        if (parsedAnswerJson && typeof parsedAnswerJson === 'object' && !Array.isArray(parsedAnswerJson)) {
-          hotspotVal = {
-            x: parsedAnswerJson.x !== undefined ? Number(parsedAnswerJson.x) : 50,
-            y: parsedAnswerJson.y !== undefined ? Number(parsedAnswerJson.y) : 50,
-            radius: parsedAnswerJson.radius !== undefined ? Number(parsedAnswerJson.radius) : (parsedAnswerJson.r !== undefined ? Number(parsedAnswerJson.r) : 10)
-          };
-        } else if (answerRaw) {
-          const parts = answerRaw.split(/[,;|]+/).map(Number);
-          hotspotVal = {
-            x: !isNaN(parts[0]) ? parts[0] : 50,
-            y: !isNaN(parts[1]) ? parts[1] : 50,
-            radius: !isNaN(parts[2]) ? parts[2] : 10
-          };
-        }
-        options = ['Vị trí hợp lệ'];
-        correctAnswer = hotspotVal;
       }
 
       return {
@@ -769,7 +772,7 @@ function serializeQuestionForSheet(question: Question, testCode: string) {
   let optionsJson = '';
   let answerJson = '';
 
-  if (qType === QuestionType.MULTIPLE_CHOICE || qType === QuestionType.SCENARIO || qType === QuestionType.IMAGE_BASED) {
+  if (qType === QuestionType.MULTIPLE_CHOICE) {
     const opts = (Array.isArray(question.options) ? question.options : []) as string[];
     // Convert to [{"id": "A", "text": "Google Docs"}, ...]
     const mappedOpts = opts.map((opt, idx) => ({
@@ -819,29 +822,37 @@ function serializeQuestionForSheet(question: Question, testCode: string) {
     optionsJson = JSON.stringify(pairs);
     answerJson = JSON.stringify(pairs);
   } 
-  else if (qType === QuestionType.DRAG_DROP) {
-    const opts = question.options as { items: string[]; textWithBlanks: string };
+  else if (qType === QuestionType.TRUE_FALSE_MULTIPLE) {
+    const opts = (Array.isArray(question.options) ? question.options : []) as string[];
+    const mappedOpts = opts.map((opt, idx) => ({
+      id: String.fromCharCode(65 + idx),
+      text: opt || ''
+    }));
+    optionsJson = JSON.stringify(mappedOpts);
+    
+    const ansArray = question.correctAnswer as boolean[] || [];
+    answerJson = JSON.stringify(ansArray);
+  }
+  else if (qType === QuestionType.VIDEO_BASED) {
+    const opts = question.options as { options: string[], videoUrl: string, isMultipleResponse: boolean, videoTitle: string, videoDuration: string };
     optionsJson = JSON.stringify({
-      items: opts?.items || [],
-      textWithBlanks: opts?.textWithBlanks || ''
+      options: opts?.options || [],
+      videoUrl: opts?.videoUrl || '',
+      isMultipleResponse: !!opts?.isMultipleResponse,
+      videoTitle: opts?.videoTitle || '',
+      videoDuration: opts?.videoDuration || ''
     });
-    const correctItems = question.correctAnswer as string[] || [];
-    answerJson = JSON.stringify(correctItems);
-  } 
-  else if (qType === QuestionType.FILL_BLANK) {
-    optionsJson = JSON.stringify({});
-    const correctKeywords = question.correctAnswer as string[] || [];
-    answerJson = JSON.stringify(correctKeywords);
-  } 
-  else if (qType === QuestionType.DROPDOWN) {
-    const opts = question.options as { dropdownOptions: string[][]; textWithDropdowns: string };
-    optionsJson = JSON.stringify({
-      dropdownOptions: opts?.dropdownOptions || [],
-      textWithDropdowns: opts?.textWithDropdowns || ''
-    });
-    const correctVals = question.correctAnswer as string[] || [];
-    answerJson = JSON.stringify(correctVals);
-  } 
+    
+    if (opts?.isMultipleResponse) {
+      const ansIndices = question.correctAnswer as number[] || [];
+      const ansLetters = ansIndices.map(idx => (idx >= 0 && idx < 26) ? String.fromCharCode(65 + idx) : '').filter(Boolean);
+      answerJson = JSON.stringify(ansLetters);
+    } else {
+      const ansIdx = Number(question.correctAnswer);
+      const ansLetter = (ansIdx >= 0 && ansIdx < 26) ? String.fromCharCode(65 + ansIdx) : 'A';
+      answerJson = JSON.stringify(ansLetter);
+    }
+  }
   else if (qType === QuestionType.SEQUENCE) {
     const opts = (Array.isArray(question.options) ? question.options : []) as string[];
     const mappedOpts = opts.map((opt, idx) => ({
@@ -854,12 +865,6 @@ function serializeQuestionForSheet(question: Question, testCode: string) {
     // The sequence steps in correct order
     const orderedSteps = correctIndices.map(idx => opts[idx]).filter(Boolean);
     answerJson = JSON.stringify(orderedSteps);
-  }
-  else if (qType === QuestionType.HOTSPOT) {
-    optionsJson = JSON.stringify(["Vị trí hợp lệ"]);
-    const corr = question.correctAnswer as { x: number; y: number; radius?: number; r?: number } || { x: 50, y: 50, radius: 10 };
-    const rVal = corr.radius !== undefined ? corr.radius : (corr.r !== undefined ? corr.r : 10);
-    answerJson = JSON.stringify({ x: corr.x, y: corr.y, radius: rVal });
   }
 
   const serialized: Record<string, any> = {

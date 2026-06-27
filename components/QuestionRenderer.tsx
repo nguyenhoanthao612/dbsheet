@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { motion } from 'motion/react';
+import { motion, Reorder } from 'motion/react';
 import { Question, QuestionType, IC3Category } from '../lib/db';
-import { Check, X, ArrowUp, ArrowDown, HelpCircle, Eye, AlertCircle } from 'lucide-react';
+import { Check, X, ArrowUp, ArrowDown, HelpCircle, Eye, AlertCircle, GripVertical } from 'lucide-react';
 
 interface QuestionRendererProps {
   question: Question;
@@ -24,16 +24,6 @@ export default function QuestionRenderer({
   const [matchingSelections, setMatchingSelections] = useState<number[]>(() => {
     if (question.type === QuestionType.MATCHING) {
       return userAnswer || Array(question.options?.itemsA?.length || 0).fill(-1);
-    }
-    return [];
-  });
-
-  // Trạng thái cho Drag & Drop (Click to place)
-  const [selectedWordIndex, setSelectedWordIndex] = useState<number | null>(null);
-  const [dragDropAnswers, setDragDropAnswers] = useState<string[]>(() => {
-    if (question.type === QuestionType.DRAG_DROP) {
-      const blanksCount = (question.options?.textWithBlanks?.match(/\[blank\d+\]/g) || []).length;
-      return userAnswer || Array(blanksCount).fill('');
     }
     return [];
   });
@@ -213,8 +203,17 @@ export default function QuestionRenderer({
 
     const handleSelectMatch = (aIdx: number, bIdxStr: string) => {
       if (isSubmitted) return;
-      const bIdx = parseInt(bIdxStr);
+      const bIdx = bIdxStr === '' ? -1 : parseInt(bIdxStr);
       const newSelections = [...matchingSelections];
+
+      // Đảm bảo tính duy nhất: 1 đáp án cột B chỉ được chọn cho 1 đáp án cột A
+      if (bIdx !== -1) {
+        const existingAIdx = newSelections.findIndex(sel => sel === bIdx);
+        if (existingAIdx !== -1 && existingAIdx !== aIdx) {
+          newSelections[existingAIdx] = -1; // Hủy chọn ở mục cũ
+        }
+      }
+
       newSelections[aIdx] = bIdx;
       setMatchingSelections(newSelections);
       onChangeAnswer(newSelections);
@@ -223,7 +222,7 @@ export default function QuestionRenderer({
     return (
       <div className="space-y-4" id={`q_matching_${question.id}`}>
         <p className="text-xs text-amber-600 font-semibold flex items-center gap-1.5 bg-amber-50 px-3 py-1.5 rounded-lg w-max mb-2">
-          <AlertCircle className="w-4 h-4" /> Hãy nối các mục ở Cột A với Cột B bằng cách chọn tương ứng.
+          <AlertCircle className="w-4 h-4" /> Hãy nối các mục ở Cột A với Cột B bằng cách chọn tương ứng. (Mỗi đáp án chỉ được dùng 1 lần)
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100">
@@ -243,21 +242,20 @@ export default function QuestionRenderer({
               }
 
               return (
-                <div key={aIdx} className={`p-3 rounded-xl border flex items-center justify-between gap-3 shadow-sm ${borderClass}`}>
-                  <span className="font-semibold text-slate-800 text-sm">{item}</span>
+                <div key={aIdx} className={`p-3 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm transition-all hover:shadow-md ${borderClass}`}>
+                  <span className="font-semibold text-slate-800 text-sm flex-1">{item}</span>
 
                   <select
                     disabled={isSubmitted}
                     value={selectedBIdx === -1 ? '' : selectedBIdx.toString()}
                     onChange={(e) => handleSelectMatch(aIdx, e.target.value)}
-                    className="p-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:ring-2 focus:ring-indigo-500 max-w-[150px] md:max-w-[200px]"
+                    className="p-2 border-2 border-slate-200 rounded-lg text-xs bg-white focus:ring-2 focus:border-indigo-500 focus:ring-indigo-200 outline-none w-full sm:w-auto"
                   >
-                    <option value="">-- Chọn nối với --</option>
+                    <option value="">-- Chọn đáp án --</option>
                     {itemsB.map((itemB: string, bIdx: number) => {
-                      // Kiểm tra xem option này có đang được chọn bởi dòng khác không để tránh gán trùng (tùy chọn)
                       return (
                         <option key={bIdx} value={bIdx.toString()}>
-                          {itemB}
+                          {idxToLetter(bIdx)}. {itemB}
                         </option>
                       );
                     })}
@@ -269,28 +267,34 @@ export default function QuestionRenderer({
 
           {/* Cột B tham khảo */}
           <div className="space-y-3">
-            <h4 className="font-bold text-slate-700 text-sm border-b pb-2">CỘT B (Danh sách lựa chọn)</h4>
+            <h4 className="font-bold text-slate-700 text-sm border-b pb-2">CỘT B (Danh sách đáp án)</h4>
             <div className="space-y-2">
-              {itemsB.map((item: string, idx: number) => (
-                <div key={idx} className="p-2.5 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-600 flex items-center gap-2">
-                  <span className="w-5 h-5 bg-slate-100 text-slate-600 rounded-full flex items-center justify-center font-bold text-[10px]">
-                    {idx + 1}
-                  </span>
-                  <span>{item}</span>
-                </div>
-              ))}
+              {itemsB.map((item: string, idx: number) => {
+                const isSelectedBySomeone = matchingSelections.includes(idx);
+                return (
+                  <div key={idx} className={`p-3 bg-white border-2 rounded-xl text-xs font-medium flex items-center gap-3 shadow-sm transition-all ${isSelectedBySomeone && !isSubmitted ? 'border-indigo-200 bg-indigo-50/30 opacity-70' : 'border-slate-200 hover:border-indigo-300'}`}>
+                    <span className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-[11px] ${isSelectedBySomeone && !isSubmitted ? 'bg-indigo-200 text-indigo-700' : 'bg-slate-100 text-slate-600'}`}>
+                      {idxToLetter(idx)}
+                    </span>
+                    <span className="text-sm">{item}</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
 
         {/* Hiển thị đáp án đúng khi nộp bài */}
         {isSubmitted && (
-          <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 text-xs text-emerald-800 mt-2">
-            <p className="font-bold mb-1">🎯 Đáp án nối đúng:</p>
-            <ul className="list-disc list-inside space-y-1">
+          <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 text-sm text-emerald-800 mt-2 shadow-sm">
+            <p className="font-bold mb-2 flex items-center gap-1.5"><Check className="w-5 h-5"/> Đáp án nối đúng:</p>
+            <ul className="space-y-2">
               {itemsA.map((item: string, aIdx: number) => (
-                <li key={aIdx}>
-                  <span className="font-semibold">{item}</span> ➔ {itemsB[question.correctAnswer[aIdx]]}
+                <li key={aIdx} className="flex items-start gap-2 bg-white/60 p-2 rounded-lg border border-emerald-100">
+                  <span className="font-bold min-w-[30px]">{aIdx + 1}.</span>
+                  <span className="font-medium text-slate-700 flex-1">{item}</span>
+                  <span className="text-emerald-500 font-bold px-2">➔</span>
+                  <span className="font-semibold">{itemsB[question.correctAnswer[aIdx]]}</span>
                 </li>
               ))}
             </ul>
@@ -300,393 +304,8 @@ export default function QuestionRenderer({
     );
   };
 
-  // --- 5. DRAG AND DROP (Click to Place) ---
-  const renderDragDrop = () => {
-    const textWithBlanks: string = question.options?.textWithBlanks || '';
-    const items: string[] = question.options?.items || [];
+  const idxToLetter = (idx: number) => String.fromCharCode(65 + idx);
 
-    // Chia văn bản thành các đoạn và chỗ trống
-    const parts = textWithBlanks.split(/(\[blank\d+\])/g);
-
-    const handleWordSelect = (idx: number) => {
-      if (isSubmitted) return;
-      setSelectedWordIndex(selectedWordIndex === idx ? null : idx);
-    };
-
-    const handleBlankClick = (blankIdx: number) => {
-      if (isSubmitted || selectedWordIndex === null) return;
-      const wordToPlace = items[selectedWordIndex];
-
-      const newAnswers = [...dragDropAnswers];
-      newAnswers[blankIdx] = wordToPlace;
-      setDragDropAnswers(newAnswers);
-      onChangeAnswer(newAnswers);
-
-      setSelectedWordIndex(null); // Reset
-    };
-
-    const handleClearBlank = (blankIdx: number) => {
-      if (isSubmitted) return;
-      const newAnswers = [...dragDropAnswers];
-      newAnswers[blankIdx] = '';
-      setDragDropAnswers(newAnswers);
-      onChangeAnswer(newAnswers);
-    };
-
-    // Tìm xem từ vựng đã được dùng chưa
-    const isWordUsed = (word: string) => dragDropAnswers.includes(word);
-
-    let blankCounter = 0;
-
-    return (
-      <div className="space-y-4" id={`q_dragdrop_${question.id}`}>
-        <p className="text-xs text-indigo-600 font-semibold flex items-center gap-1.5 bg-indigo-50 px-3 py-1.5 rounded-lg w-max mb-1">
-          <AlertCircle className="w-4 h-4" /> Hướng dẫn: Chọn từ ở dưới rồi nhấn vào [Chỗ trống] tương ứng để điền.
-        </p>
-
-        {/* Đoạn văn chứa chỗ trống */}
-        <div className="p-5 bg-amber-50/30 rounded-2xl border border-amber-100 text-base leading-loose text-slate-800">
-          {parts.map((part, index) => {
-            if (part.match(/\[blank\d+\]/)) {
-              const currentBlankIdx = blankCounter;
-              blankCounter++;
-
-              const filledWord = dragDropAnswers[currentBlankIdx];
-              const isCorrect = filledWord === question.correctAnswer[currentBlankIdx];
-
-              let blankClass = 'border-slate-300 bg-white text-slate-700 hover:border-indigo-400';
-              if (filledWord) {
-                blankClass = 'border-indigo-500 bg-indigo-50 text-indigo-900 font-bold';
-              }
-              if (isSubmitted) {
-                blankClass = isCorrect
-                  ? 'border-emerald-500 bg-emerald-100 text-emerald-900 font-bold'
-                  : 'border-rose-500 bg-rose-100 text-rose-900 font-bold';
-              }
-
-              return (
-                <button
-                  key={index}
-                  disabled={isSubmitted}
-                  onClick={() => handleBlankClick(currentBlankIdx)}
-                  className={`mx-1.5 px-3 py-1 rounded-lg border-2 border-dashed min-w-[100px] text-center inline-flex items-center justify-center gap-1 transition-all text-sm h-9 align-middle ${blankClass}`}
-                >
-                  <span>{filledWord || `[Chỗ trống ${currentBlankIdx + 1}]`}</span>
-                  {filledWord && !isSubmitted && (
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleClearBlank(currentBlankIdx);
-                      }}
-                      className="ml-1 text-slate-400 hover:text-slate-600 font-bold text-xs p-0.5 bg-slate-100 rounded-full w-4 h-4 flex items-center justify-center"
-                    >
-                      ×
-                    </span>
-                  )}
-                  {isSubmitted && (
-                    <span>
-                      {isCorrect ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <X className="w-3.5 h-3.5 text-rose-600" />}
-                    </span>
-                  )}
-                </button>
-              );
-            }
-            return <span key={index}>{part}</span>;
-          })}
-        </div>
-
-        {/* Danh sách từ vựng */}
-        <div className="flex flex-wrap gap-2.5 p-3 bg-slate-50 rounded-xl border border-slate-100">
-          {items.map((word: string, idx: number) => {
-            const isSelected = selectedWordIndex === idx;
-            const isUsed = isWordUsed(word);
-
-            let chipClass = 'border-slate-200 bg-white hover:border-indigo-400 text-slate-700';
-            if (isUsed) {
-              chipClass = 'opacity-40 border-slate-100 bg-slate-100 text-slate-400 cursor-not-allowed';
-            } else if (isSelected) {
-              chipClass = 'border-indigo-600 bg-indigo-600 text-white font-bold ring-2 ring-indigo-300';
-            }
-
-            return (
-              <button
-                key={idx}
-                id={`drag_word_${idx}`}
-                disabled={isSubmitted || isUsed}
-                onClick={() => handleWordSelect(idx)}
-                className={`px-4 py-2 rounded-xl border-2 text-sm font-semibold transition-all shadow-sm ${chipClass}`}
-              >
-                {word}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Hiển thị kết quả đúng khi nộp bài */}
-        {isSubmitted && (
-          <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 text-xs text-emerald-800 mt-2">
-            <p className="font-bold mb-1">🎯 Đáp án đúng:</p>
-            <p className="italic">
-              {question.correctAnswer.map((word: string, idx: number) => `(Chỗ trống ${idx + 1}): "${word}"`).join(', ')}
-            </p>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // --- 6. FILL IN THE BLANK ---
-  const renderFillBlank = () => {
-    const handleTextChange = (val: string) => {
-      if (isSubmitted) return;
-      onChangeAnswer(val);
-    };
-
-    const isAnswerCorrect = () => {
-      if (!userAnswer) return false;
-      const cleanUser = userAnswer.toString().trim().toLowerCase();
-      const possibleAnswers: string[] = Array.isArray(question.correctAnswer)
-        ? question.correctAnswer
-        : [question.correctAnswer];
-      return possibleAnswers.some((ans: string) => ans.trim().toLowerCase() === cleanUser);
-    };
-
-    let inputBorderClass = 'border-slate-200 focus:ring-blue-500';
-    if (isSubmitted) {
-      inputBorderClass = isAnswerCorrect()
-        ? 'border-emerald-500 bg-emerald-50 text-emerald-900 ring-2 ring-emerald-200'
-        : 'border-rose-500 bg-rose-50 text-rose-900 ring-2 ring-rose-200';
-    }
-
-    return (
-      <div className="space-y-3" id={`q_fillblank_${question.id}`}>
-        <p className="text-sm font-semibold text-slate-700">Câu trả lời của bạn:</p>
-        <div className="relative max-w-md">
-          <input
-            type="text"
-            id={`input_fillblank_${question.id}`}
-            disabled={isSubmitted}
-            value={userAnswer || ''}
-            onChange={(e) => handleTextChange(e.target.value)}
-            placeholder="Gõ đáp án của bạn tại đây..."
-            className={`w-full p-4 pr-12 rounded-xl border-2 text-base outline-none transition-all ${inputBorderClass}`}
-          />
-          {isSubmitted && (
-            <div className="absolute right-4 top-1/2 -translate-y-1/2">
-              {isAnswerCorrect() ? <Check className="w-6 h-6 text-emerald-600" /> : <X className="w-6 h-6 text-rose-600" />}
-            </div>
-          )}
-        </div>
-
-        {isSubmitted && (
-          <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 text-xs text-emerald-800 mt-2 max-w-md">
-            <p className="font-bold">🎯 Đáp án đúng:</p>
-            <p className="font-medium text-sm">
-              {Array.isArray(question.correctAnswer) ? question.correctAnswer.join(' hoặc ') : question.correctAnswer}
-            </p>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // --- 7. DROPDOWN SELECTION ---
-  const renderDropdown = () => {
-    const textWithDropdowns: string = question.options?.textWithDropdowns || '';
-    const dropdownOptions: string[][] = question.options?.dropdownOptions || [];
-
-    const parts = textWithDropdowns.split(/(\[drop\d+\])/g);
-
-    const handleSelectDropdown = (dropIdx: number, val: string) => {
-      if (isSubmitted) return;
-      const currentSelections = userAnswer || Array(dropdownOptions.length).fill('');
-      const newSelections = [...currentSelections];
-      newSelections[dropIdx] = val;
-      onChangeAnswer(newSelections);
-    };
-
-    let dropCounter = 0;
-
-    return (
-      <div className="space-y-4" id={`q_dropdown_${question.id}`}>
-        <div className="p-5 bg-blue-50/30 rounded-2xl border border-blue-100 text-base leading-loose text-slate-800">
-          {parts.map((part, index) => {
-            if (part.match(/\[drop\d+\]/)) {
-              const currentDropIdx = dropCounter;
-              dropCounter++;
-
-              const options = dropdownOptions[currentDropIdx] || [];
-              const currentVal = userAnswer ? userAnswer[currentDropIdx] : '';
-              const isCorrect = currentVal === question.correctAnswer[currentDropIdx];
-
-              let selectClass = 'border-slate-300 bg-white text-slate-700 focus:ring-blue-500';
-              if (currentVal) {
-                selectClass = 'border-blue-500 bg-blue-50 text-blue-900 font-bold';
-              }
-              if (isSubmitted) {
-                selectClass = isCorrect
-                  ? 'border-emerald-500 bg-emerald-100 text-emerald-900'
-                  : 'border-rose-500 bg-rose-100 text-rose-900';
-              }
-
-              return (
-                <select
-                  key={index}
-                  disabled={isSubmitted}
-                  value={currentVal}
-                  onChange={(e) => handleSelectDropdown(currentDropIdx, e.target.value)}
-                  className={`mx-1.5 px-3 py-1.5 border-2 rounded-lg text-sm bg-white font-medium focus:outline-none transition-all ${selectClass}`}
-                >
-                  <option value="">-- Chọn --</option>
-                  {options.map((opt, oIdx) => (
-                    <option key={oIdx} value={opt}>
-                      {opt}
-                    </option>
-                  ))}
-                </select>
-              );
-            }
-            return <span key={index}>{part}</span>;
-          })}
-        </div>
-
-        {/* Hiển thị đáp án đúng khi nộp bài */}
-        {isSubmitted && (
-          <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 text-xs text-emerald-800 mt-2">
-            <p className="font-bold mb-1">🎯 Lựa chọn đúng:</p>
-            <p className="italic">
-              {question.correctAnswer.map((word: string, idx: number) => `(Vị trí ${idx + 1}): "${word}"`).join(', ')}
-            </p>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // --- 8. IMAGE-BASED QUESTION ---
-  const renderImageBased = () => {
-    const options = question.options || [];
-    return (
-      <div className="space-y-4" id={`q_image_${question.id}`}>
-        {question.imageUrl && (
-          <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm max-w-2xl mx-auto">
-            <img
-              src={question.imageUrl}
-              alt="Minh họa câu hỏi"
-              className="w-full h-auto max-h-[250px] object-cover"
-              referrerPolicy="no-referrer"
-            />
-            <div className="absolute top-2 right-2 bg-black/60 backdrop-blur text-white px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1">
-              <Eye className="w-3.5 h-3.5" /> Hình ảnh minh họa
-            </div>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {options.map((opt: string, idx: number) => {
-            const isSelected = userAnswer === idx;
-            const isCorrectAnswer = question.correctAnswer === idx;
-            let btnClass = 'border-slate-200 hover:border-teal-400 hover:bg-teal-50/50 bg-white';
-            let icon = null;
-
-            if (isSelected) {
-              btnClass = 'border-teal-500 bg-teal-50 text-teal-900 font-medium';
-            }
-
-            if (isSubmitted) {
-              if (isCorrectAnswer) {
-                btnClass = 'border-emerald-500 bg-emerald-50 text-emerald-900 font-medium';
-                icon = <Check className="w-5 h-5 text-emerald-600" />;
-              } else if (isSelected) {
-                btnClass = 'border-rose-500 bg-rose-50 text-rose-900';
-                icon = <X className="w-5 h-5 text-rose-600" />;
-              } else {
-                btnClass = 'border-slate-100 bg-slate-50/50 text-slate-400 cursor-not-allowed';
-              }
-            }
-
-            return (
-              <button
-                key={idx}
-                id={`opt_img_${idx}`}
-                disabled={isSubmitted}
-                onClick={() => onChangeAnswer(idx)}
-                className={`p-4 rounded-xl border text-left transition-all flex items-center justify-between gap-3 text-sm md:text-base ${btnClass}`}
-              >
-                <div className="flex items-center gap-3">
-                  <span className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${isSelected ? 'bg-teal-500 text-white' : 'bg-slate-100 text-slate-600'}`}>
-                    {String.fromCharCode(65 + idx)}
-                  </span>
-                  <span>{opt}</span>
-                </div>
-                {icon}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
-  // --- 9. SCENARIO QUESTION ---
-  const renderScenario = () => {
-    const options = question.options || [];
-    return (
-      <div className="space-y-4" id={`q_scenario_${question.id}`}>
-        <div className="bg-gradient-to-r from-violet-50 to-indigo-50 p-4 rounded-2xl border border-indigo-100 flex gap-4 items-start shadow-sm">
-          <div className="bg-indigo-100 p-2 rounded-xl text-indigo-600 font-bold text-xs flex items-center justify-center flex-shrink-0">
-            🎬 Tình Huống
-          </div>
-          <p className="text-slate-700 font-semibold text-sm leading-relaxed">
-            Hãy đặt mình vào vị trí nhân vật để xử lý tình huống thực tế bám sát chuẩn kiến thức IC3 GS6 này nhé!
-          </p>
-        </div>
-
-        <div className="space-y-3">
-          {options.map((opt: string, idx: number) => {
-            const isSelected = userAnswer === idx;
-            const isCorrectAnswer = question.correctAnswer === idx;
-            let btnClass = 'border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/50 bg-white';
-            let icon = null;
-
-            if (isSelected) {
-              btnClass = 'border-indigo-500 bg-indigo-50 text-indigo-900 font-medium';
-            }
-
-            if (isSubmitted) {
-              if (isCorrectAnswer) {
-                btnClass = 'border-emerald-500 bg-emerald-50 text-emerald-900 font-medium';
-                icon = <Check className="w-5 h-5 text-emerald-600" />;
-              } else if (isSelected) {
-                btnClass = 'border-rose-500 bg-rose-50 text-rose-900';
-                icon = <X className="w-5 h-5 text-rose-600" />;
-              } else {
-                btnClass = 'border-slate-100 bg-slate-50/50 text-slate-400 cursor-not-allowed';
-              }
-            }
-
-            return (
-              <button
-                key={idx}
-                id={`opt_scen_${idx}`}
-                disabled={isSubmitted}
-                onClick={() => onChangeAnswer(idx)}
-                className={`w-full p-4 rounded-xl border text-left transition-all flex items-center justify-between gap-3 text-sm md:text-base ${btnClass}`}
-              >
-                <div className="flex items-center gap-3">
-                  <span className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${isSelected ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-600'}`}>
-                    {String.fromCharCode(65 + idx)}
-                  </span>
-                  <span>{opt}</span>
-                </div>
-                {icon}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
 
   // --- 10. SEQUENCE ORDERING ---
   const renderSequence = () => {
@@ -701,88 +320,104 @@ export default function QuestionRenderer({
       newItems[targetIdx] = temp;
 
       setSequenceItems(newItems);
-
-      // Lưu câu trả lời dưới dạng mảng các chỉ số gốc của các mục trong question.options
       const answerIndices = newItems.map((item) => question.options.indexOf(item));
       onChangeAnswer(answerIndices);
     };
 
-    const isOrderCorrect = () => {
-      if (!userAnswer) return false;
-      return JSON.stringify(userAnswer) === JSON.stringify(question.correctAnswer);
+    const handleReorder = (newItems: string[]) => {
+      if (isSubmitted) return;
+      setSequenceItems(newItems);
+      const answerIndices = newItems.map((item) => question.options.indexOf(item));
+      onChangeAnswer(answerIndices);
     };
 
     return (
       <div className="space-y-4" id={`q_sequence_${question.id}`}>
         <p className="text-xs text-orange-600 font-semibold flex items-center gap-1.5 bg-orange-50 px-3 py-1.5 rounded-lg w-max mb-1">
-          <AlertCircle className="w-4 h-4" /> Hướng dẫn: Nhấn các nút mũi tên (▲ ▼) để hoán đổi vị trí của các bước cho đúng quy trình.
+          <AlertCircle className="w-4 h-4" /> Hướng dẫn: Kéo thả các bước bên dưới hoặc dùng nút (▲ ▼) để sắp xếp đúng thứ tự.
         </p>
 
-        <div className="space-y-2.5 bg-slate-50 p-4 rounded-2xl border border-slate-100">
-          {sequenceItems.map((item: string, idx: number) => {
-            const originalIdx = question.options.indexOf(item);
-            const isCorrectSpot = question.correctAnswer[idx] === originalIdx;
+        {isSubmitted ? (
+          <div className="space-y-3 bg-white p-5 rounded-3xl border shadow-sm">
+            {sequenceItems.map((item: string, idx: number) => {
+              const originalIdx = question.options.indexOf(item);
+              const isCorrectSpot = question.correctAnswer[idx] === originalIdx;
+              const borderClass = isCorrectSpot ? 'border-emerald-400 bg-emerald-50/50' : 'border-rose-400 bg-rose-50/50';
 
-            let borderClass = 'border-slate-200 bg-white text-slate-800';
-            if (isSubmitted) {
-              borderClass = isCorrectSpot ? 'border-emerald-400 bg-emerald-50/50' : 'border-rose-400 bg-rose-50/50';
-            }
-
-            return (
-              <div
-                key={idx}
-                id={`seq_step_${idx}`}
-                className={`p-3.5 rounded-xl border flex items-center justify-between gap-4 shadow-sm transition-all ${borderClass}`}
-              >
-                <div className="flex items-center gap-3">
-                  <span className="w-6 h-6 bg-slate-100 text-slate-600 rounded-full flex items-center justify-center font-bold text-xs">
-                    {idx + 1}
-                  </span>
-                  <span className="text-sm font-medium">{item}</span>
+              return (
+                <div key={item} className={`p-4 rounded-xl border-2 flex items-center justify-between gap-4 shadow-sm ${borderClass}`}>
+                  <div className="flex items-center gap-3">
+                    <span className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${isCorrectSpot ? 'bg-emerald-200 text-emerald-800' : 'bg-rose-200 text-rose-800'}`}>
+                      {idx + 1}
+                    </span>
+                    <span className="text-sm font-medium text-slate-800">{item}</span>
+                  </div>
+                  <div>
+                    {isCorrectSpot ? (
+                      <Check className="w-6 h-6 text-emerald-500" />
+                    ) : (
+                      <div className="flex flex-col items-end">
+                         <X className="w-6 h-6 text-rose-500 mb-1" />
+                         <span className="text-xs font-bold px-2 py-0.5 bg-rose-100 text-rose-700 rounded-lg">Đúng: Bước {question.correctAnswer.indexOf(originalIdx) + 1}</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
+              );
+            })}
+          </div>
+        ) : (
+          <Reorder.Group axis="y" values={sequenceItems} onReorder={handleReorder} className="space-y-3 bg-white p-5 rounded-3xl border shadow-sm">
+            {sequenceItems.map((item: string, idx: number) => {
+              return (
+                <Reorder.Item
+                  key={item}
+                  value={item}
+                  id={`seq_step_${idx}`}
+                  whileDrag={{ scale: 1.02, boxShadow: "0px 15px 30px rgba(0,0,0,0.1)", zIndex: 50, rotate: 1 }}
+                  transition={{ duration: 0.15 }}
+                  className={`p-4 rounded-xl border-2 border-slate-200 bg-white flex items-center justify-between gap-4 shadow-sm transition-colors hover:border-orange-300 hover:shadow-md cursor-grab active:cursor-grabbing relative group`}
+                >
+                  <div className="flex items-center gap-3 w-full">
+                    <GripVertical className="w-5 h-5 text-slate-300 group-hover:text-orange-400 transition-colors cursor-grab" />
+                    <span className="w-8 h-8 bg-slate-100 text-slate-600 rounded-full flex items-center justify-center font-bold text-sm shrink-0">
+                      {idx + 1}
+                    </span>
+                    <span className="text-sm font-medium text-slate-800 select-none flex-1">{item}</span>
+                  </div>
 
-                {/* Các nút di chuyển */}
-                {!isSubmitted && (
-                  <div className="flex items-center gap-1">
+                  {/* Các nút di chuyển */}
+                  <div className="flex items-center gap-1 shrink-0">
                     <button
                       disabled={idx === 0}
                       onClick={() => handleMove(idx, 'up')}
-                      className={`p-1.5 rounded-lg border ${idx === 0 ? 'bg-slate-50 text-slate-300' : 'bg-white text-slate-600 hover:bg-slate-50 border-slate-200'}`}
+                      className={`p-2 rounded-lg border transition-colors ${idx === 0 ? 'bg-slate-50 text-slate-300 border-slate-100' : 'bg-white text-slate-600 hover:bg-orange-50 hover:text-orange-600 hover:border-orange-200 border-slate-200'}`}
+                      title="Chuyển lên"
                     >
                       <ArrowUp className="w-4 h-4" />
                     </button>
                     <button
                       disabled={idx === sequenceItems.length - 1}
                       onClick={() => handleMove(idx, 'down')}
-                      className={`p-1.5 rounded-lg border ${idx === sequenceItems.length - 1 ? 'bg-slate-50 text-slate-300' : 'bg-white text-slate-600 hover:bg-slate-50 border-slate-200'}`}
+                      className={`p-2 rounded-lg border transition-colors ${idx === sequenceItems.length - 1 ? 'bg-slate-50 text-slate-300 border-slate-100' : 'bg-white text-slate-600 hover:bg-orange-50 hover:text-orange-600 hover:border-orange-200 border-slate-200'}`}
+                      title="Chuyển xuống"
                     >
                       <ArrowDown className="w-4 h-4" />
                     </button>
                   </div>
-                )}
-                {isSubmitted && (
-                  <div>
-                    {isCorrectSpot ? (
-                      <Check className="w-5 h-5 text-emerald-500" />
-                    ) : (
-                      <span className="text-[10px] font-bold px-2 py-0.5 bg-rose-100 text-rose-700 rounded-full flex items-center gap-0.5">
-                        <X className="w-3 h-3" /> Đúng: Bước {question.correctAnswer.indexOf(originalIdx) + 1}
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                </Reorder.Item>
+              );
+            })}
+          </Reorder.Group>
+        )}
 
         {/* Hiển thị đáp án đúng khi nộp bài */}
         {isSubmitted && (
-          <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 text-xs text-emerald-800 mt-2">
-            <p className="font-bold mb-1">🎯 Trật tự quy trình đúng chuẩn:</p>
-            <ol className="list-decimal list-inside space-y-1">
+          <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 text-sm text-emerald-800 mt-2 shadow-sm">
+            <p className="font-bold mb-2 flex items-center gap-1.5"><Check className="w-5 h-5"/> Trật tự quy trình đúng chuẩn:</p>
+            <ol className="list-decimal list-inside space-y-2">
               {question.correctAnswer.map((origIdx: number) => (
-                <li key={origIdx} className="font-medium">
+                <li key={origIdx} className="font-medium bg-white/60 p-2 rounded-lg border border-emerald-100">
                   {question.options[origIdx]}
                 </li>
               ))}
@@ -793,94 +428,172 @@ export default function QuestionRenderer({
     );
   };
 
-  // --- 11. HOTSPOT CLICK AREA ---
-  const renderHotspot = () => {
-    const imageUrl = question.imageUrl || "https://picsum.photos/seed/ic3screen/800/450";
-    const corr = question.correctAnswer || { x: 50, y: 50, radius: 10 };
-    
-    const handleClickImage = (e: React.MouseEvent<HTMLDivElement>) => {
-      if (isSubmitted) return;
-      const rect = e.currentTarget.getBoundingClientRect();
-      const clickX = ((e.clientX - rect.left) / rect.width) * 100;
-      const clickY = ((e.clientY - rect.top) / rect.height) * 100;
-      onChangeAnswer({ x: Math.round(clickX), y: Math.round(clickY) });
+
+  // --- TRUE/FALSE MULTIPLE ---
+  const renderTrueFalseMultiple = () => {
+    const statements: string[] = question.options || [];
+    const userAnswerArray: boolean[] = Array.isArray(userAnswer) ? userAnswer : [];
+
+    return (
+      <div className="space-y-4">
+        {statements.map((stmt, idx) => {
+          const isSelectedTrue = userAnswerArray[idx] === true;
+          const isSelectedFalse = userAnswerArray[idx] === false;
+          
+          let trueStyle = 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100';
+          let falseStyle = 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100';
+          
+          if (!isSubmitted) {
+            if (isSelectedTrue) trueStyle = 'bg-indigo-50 border-indigo-400 text-indigo-700 ring-2 ring-indigo-200';
+            if (isSelectedFalse) falseStyle = 'bg-indigo-50 border-indigo-400 text-indigo-700 ring-2 ring-indigo-200';
+          } else {
+            const isCorrect = Array.isArray(question.correctAnswer) ? question.correctAnswer[idx] : true;
+            
+            if (isCorrect === true) {
+               trueStyle = 'bg-emerald-50 border-emerald-400 text-emerald-800 font-bold shadow-inner ring-2 ring-emerald-200/50';
+               if (isSelectedFalse) falseStyle = 'bg-rose-50 border-rose-300 text-rose-700 line-through opacity-70';
+            } else {
+               falseStyle = 'bg-emerald-50 border-emerald-400 text-emerald-800 font-bold shadow-inner ring-2 ring-emerald-200/50';
+               if (isSelectedTrue) trueStyle = 'bg-rose-50 border-rose-300 text-rose-700 line-through opacity-70';
+            }
+          }
+
+          return (
+            <div key={idx} className="flex flex-col sm:flex-row gap-3 sm:items-center bg-white p-4 border border-slate-200 rounded-xl shadow-sm">
+              <div className="flex-1 text-sm font-semibold text-slate-800">
+                {stmt}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={isSubmitted}
+                  onClick={() => {
+                    const newAns = [...userAnswerArray];
+                    newAns[idx] = true;
+                    onChangeAnswer(newAns);
+                  }}
+                  className={`px-4 py-2 text-sm font-bold rounded-xl border-2 transition-all flex-1 sm:flex-none ${trueStyle}`}
+                >
+                  Đúng
+                </button>
+                <button
+                  type="button"
+                  disabled={isSubmitted}
+                  onClick={() => {
+                    const newAns = [...userAnswerArray];
+                    newAns[idx] = false;
+                    onChangeAnswer(newAns);
+                  }}
+                  className={`px-4 py-2 text-sm font-bold rounded-xl border-2 transition-all flex-1 sm:flex-none ${falseStyle}`}
+                >
+                  Sai
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  // --- VIDEO BASED ---
+  const renderVideoBased = () => {
+    const opts = question.options?.options || [];
+    const videoUrl = question.options?.videoUrl || '';
+    const isMrq = question.options?.isMultipleResponse || false;
+    const userAnswerArr = isMrq ? (Array.isArray(userAnswer) ? userAnswer : []) : (typeof userAnswer === 'number' ? [userAnswer] : []);
+
+    const isOptionSelected = (idx: number) => {
+      return userAnswerArr.includes(idx);
     };
 
-    const isCorrect = () => {
-      if (!userAnswer || typeof userAnswer !== 'object') return false;
-      const dx = userAnswer.x - corr.x;
-      const dy = userAnswer.y - corr.y;
-      const distance = Math.sqrt(dx * dx + dy * dy);
-      return distance <= corr.radius;
+    const isOptionCorrect = (idx: number) => {
+      if (isMrq) {
+        const corrAns = Array.isArray(question.correctAnswer) ? question.correctAnswer : [];
+        return corrAns.includes(idx);
+      } else {
+        return question.correctAnswer === idx;
+      }
+    };
+
+    const getEmbedUrl = (url: string) => {
+      if (!url) return '';
+      if (url.includes('youtube.com/watch?v=')) {
+        return url.replace('watch?v=', 'embed/').split('&')[0];
+      }
+      if (url.includes('youtu.be/')) {
+        return url.replace('youtu.be/', 'youtube.com/embed/');
+      }
+      return url;
     };
 
     return (
-      <div className="space-y-4" id={`q_hotspot_${question.id}`}>
-        <p className="text-xs text-indigo-600 font-semibold flex items-center gap-1.5 bg-indigo-50 px-3 py-1.5 rounded-lg w-max mb-1">
-          <AlertCircle className="w-4 h-4" /> Hướng dẫn: Nhấp chuột trực tiếp vào vị trí/biểu tượng được yêu cầu trên hình ảnh dưới đây.
-        </p>
-
-        <div 
-          className="relative overflow-hidden rounded-2xl border-2 border-slate-200 bg-slate-100 shadow-md max-w-2xl mx-auto cursor-crosshair select-none"
-          onClick={handleClickImage}
-        >
-          <img
-            src={imageUrl}
-            alt="Hotspot Interface"
-            className="w-full h-auto object-contain select-none pointer-events-none"
-            referrerPolicy="no-referrer"
-          />
-
-          {/* User's click target */}
-          {userAnswer && typeof userAnswer === 'object' && 'x' in userAnswer && (
-            <div 
-              className={`absolute w-8 h-8 -ml-4 -mt-4 rounded-full border-2 flex items-center justify-center animate-bounce shadow-lg ${
-                isSubmitted 
-                  ? (isCorrect() ? 'bg-emerald-500/40 border-emerald-500 text-white' : 'bg-rose-500/40 border-rose-500 text-white')
-                  : 'bg-indigo-500/40 border-indigo-600 text-white'
-              }`}
-              style={{ left: `${userAnswer.x}%`, top: `${userAnswer.y}%` }}
-            >
-              <div className="w-2.5 h-2.5 bg-white rounded-full"></div>
-            </div>
-          )}
-
-          {/* Correct target area (shown after submission) */}
-          {isSubmitted && (
-            <div 
-              className="absolute border-4 border-dashed border-emerald-500 bg-emerald-500/20 rounded-full animate-pulse flex items-center justify-center"
-              style={{ 
-                left: `${corr.x}%`, 
-                top: `${corr.y}%`, 
-                width: `${corr.radius * 2}%`, 
-                height: `${corr.radius * 2}%`,
-                marginLeft: `-${corr.radius}%`,
-                marginTop: `-${corr.radius}%`
-              }}
-              title="Khu vực đáp án đúng"
-            >
-              <span className="text-[10px] bg-emerald-600 text-white px-1 py-0.5 rounded shadow font-bold">ZÔN ĐÚNG</span>
-            </div>
-          )}
-        </div>
-
-        {isSubmitted && (
-          <div className={`p-4 rounded-xl border text-sm ${isCorrect() ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
-            <p className="font-extrabold flex items-center gap-1.5">
-              {isCorrect() ? (
-                <>
-                  <Check className="w-5 h-5 text-emerald-600" />
-                  Chúc mừng! Bạn đã click chính xác vào vùng yêu cầu.
-                </>
-              ) : (
-                <>
-                  <X className="w-5 h-5 text-rose-600" />
-                  Chưa chính xác! Bạn đã nhấp lệch vị trí. Hãy xem vùng viền xanh lá đứt đoạn để biết vị trí đúng.
-                </>
-              )}
-            </p>
+      <div className="space-y-6">
+        {videoUrl && (
+          <div className="w-full aspect-video rounded-2xl overflow-hidden bg-black border-2 border-slate-200 shadow-md">
+            <iframe 
+              src={getEmbedUrl(videoUrl)}
+              title="Video"
+              className="w-full h-full"
+              allowFullScreen
+            ></iframe>
           </div>
         )}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {opts.map((opt: string, idx: number) => {
+            const letter = String.fromCharCode(65 + idx);
+            let stateClass = 'bg-white border-slate-200 text-slate-700 hover:border-indigo-300 hover:shadow-md';
+            let letterClass = 'bg-slate-100 text-slate-500 border-slate-200';
+
+            if (!isSubmitted) {
+              if (isOptionSelected(idx)) {
+                stateClass = 'bg-indigo-50 border-indigo-400 text-indigo-900 shadow-inner ring-2 ring-indigo-200 ring-offset-1';
+                letterClass = 'bg-indigo-600 text-white border-indigo-700 shadow-sm';
+              }
+            } else {
+              const selected = isOptionSelected(idx);
+              const correct = isOptionCorrect(idx);
+
+              if (correct) {
+                stateClass = 'bg-emerald-50 border-emerald-400 text-emerald-900 shadow-inner ring-2 ring-emerald-200/50';
+                letterClass = 'bg-emerald-500 text-white border-emerald-600 shadow-sm';
+              } else if (selected && !correct) {
+                stateClass = 'bg-rose-50 border-rose-300 text-rose-800 opacity-80';
+                letterClass = 'bg-rose-500 text-white border-rose-600';
+              } else {
+                stateClass = 'bg-slate-50 border-slate-200 text-slate-400 opacity-60';
+              }
+            }
+
+            return (
+              <button
+                key={idx}
+                type="button"
+                disabled={isSubmitted}
+                onClick={() => {
+                  if (isMrq) {
+                    const newAns = [...userAnswerArr];
+                    if (newAns.includes(idx)) {
+                      onChangeAnswer(newAns.filter(i => i !== idx));
+                    } else {
+                      onChangeAnswer([...newAns, idx]);
+                    }
+                  } else {
+                    onChangeAnswer(idx);
+                  }
+                }}
+                className={`flex items-start text-left p-4 rounded-2xl border-2 transition-all ${stateClass}`}
+              >
+                <span className={`flex-shrink-0 w-8 h-8 rounded-lg border flex items-center justify-center font-black text-sm mr-3 transition-colors ${letterClass}`}>
+                  {letter}
+                </span>
+                <span className="font-semibold text-sm leading-relaxed mt-1">
+                  {opt}
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </div>
     );
   };
@@ -896,20 +609,12 @@ export default function QuestionRenderer({
         return renderTrueFalse();
       case QuestionType.MATCHING:
         return renderMatching();
-      case QuestionType.DRAG_DROP:
-        return renderDragDrop();
-      case QuestionType.FILL_BLANK:
-        return renderFillBlank();
-      case QuestionType.DROPDOWN:
-        return renderDropdown();
-      case QuestionType.IMAGE_BASED:
-        return renderImageBased();
-      case QuestionType.SCENARIO:
-        return renderScenario();
+      case QuestionType.TRUE_FALSE_MULTIPLE:
+        return renderTrueFalseMultiple();
+      case QuestionType.VIDEO_BASED:
+        return renderVideoBased();
       case QuestionType.SEQUENCE:
         return renderSequence();
-      case QuestionType.HOTSPOT:
-        return renderHotspot();
       default:
         return <p className="text-slate-500">Dạng câu hỏi không hỗ trợ.</p>;
     }
