@@ -48,13 +48,26 @@ function doPost(e) {
       Logger.log(e.postData.contents);
       postData = JSON.parse(e.postData.contents);
       Logger.log(postData.action);
+    } else if (e.parameter) {
+      // Fallback cho application/x-www-form-urlencoded từ Vercel
+      postData = e.parameter;
+      // Parse các object/array bị stringify
+      for (var key in postData) {
+        if (typeof postData[key] === 'string' && (postData[key].startsWith('{') || postData[key].startsWith('['))) {
+          try {
+            postData[key] = JSON.parse(postData[key]);
+          } catch(err) {
+             // Bỏ qua nếu không parse được
+          }
+        }
+      }
     }
   } catch (err) {
-    Logger.log("Error parsing JSON: " + err);
+    Logger.log("Error parsing body: " + err);
     postData = e.parameter;
   }
   
-  if (!action && postData.action) {
+  if (!action && postData && postData.action) {
     action = postData.action;
   }
   
@@ -566,15 +579,15 @@ function handleDeleteRow(data, specificAction) {
   if (specificAction === 'deleteStudent') {
     sheetName = 'students';
     keyColumn = 'student_id';
-    keyValue = data.student_id || data.id;
+    keyValue = data.student_id || data.id || keyValue;
   } else if (specificAction === 'deleteTest' || specificAction === 'deleteExam') {
     sheetName = 'exam_catalog';
     keyColumn = 'exam_id';
-    keyValue = data.exam_id || data.test_id || data.id;
+    keyValue = data.exam_id || data.test_id || data.id || keyValue;
   } else if (specificAction === 'deleteQuestion') {
-    sheetName = data.sheet_name || data.test_id;
+    sheetName = data.sheet_name || data.test_id || sheetName;
     keyColumn = 'id';
-    keyValue = data.id || data.question_id;
+    keyValue = data.id || data.question_id || keyValue;
   }
   
   if (!sheetName || !keyColumn || !keyValue) {
