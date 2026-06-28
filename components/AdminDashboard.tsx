@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Student, Test, Question, TestResult, getStudents, saveStudents, getTests, saveTests,
   getQuestions, saveQuestions, getTestResults, saveTestResults, QuestionType, IC3Category, BADGES
@@ -86,6 +86,33 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
   const [videoTitle, setVideoTitle] = useState('');
   const [videoDuration, setVideoDuration] = useState('');
   const [isVideoMrq, setIsVideoMrq] = useState(false);
+
+  // States for new IC3 GS6 Question Types
+  const [hotspotSpots, setHotspotSpots] = useState<{ label: string; x: number; y: number; w: number; h: number; isCorrect: boolean }[]>([
+    { label: 'CPU', x: 20, y: 30, w: 25, h: 25, isCorrect: true },
+    { label: 'RAM Slot', x: 55, y: 15, w: 10, h: 40, isCorrect: false }
+  ]);
+  const [catCategories, setCatCategories] = useState<string[]>(['Thiết bị nhập', 'Thiết bị xuất']);
+  const [catItems, setCatItems] = useState<{ text: string; categoryIdx: number }[]>([
+    { text: 'Bàn phím', categoryIdx: 0 },
+    { text: 'Máy in', categoryIdx: 1 },
+    { text: 'Chuột', categoryIdx: 0 },
+    { text: 'Màn hình', categoryIdx: 1 }
+  ]);
+  const [matchImgPairs, setMatchImgPairs] = useState<{ text: string; imageUrl: string }[]>([
+    { text: 'USB Port', imageUrl: 'https://images.unsplash.com/photo-1615663245857-ac93bb7c39e7?w=150&auto=format&fit=crop&q=60' },
+    { text: 'HDMI Port', imageUrl: 'https://images.unsplash.com/photo-1557002665-c552e183c49b?w=150&auto=format&fit=crop&q=60' }
+  ]);
+  const [matrixRows, setMatrixRows] = useState<string[]>(['Android', 'Windows', 'MacOS']);
+  const [matrixCols, setMatrixCols] = useState<string[]>(['Google', 'Microsoft', 'Apple']);
+  const [matrixCorrect, setMatrixCorrect] = useState<number[]>([0, 1, 2]); // maps matrixRows to matrixCols index
+
+  // Hotspot drag/resize editor states
+  const hotspotEditorContainerRef = useRef<HTMLDivElement>(null);
+  const [activeDragIdx, setActiveDragIdx] = useState<number | null>(null);
+  const [activeResizeIdx, setActiveResizeIdx] = useState<number | null>(null);
+  const [dragStartPercent, setDragStartPercent] = useState({ x: 0, y: 0 });
+  const [spotStartCoords, setSpotStartCoords] = useState({ x: 0, y: 0, w: 0, h: 0 });
 
   // States for individual question auto-parsing
   const [parsingError, setParsingError] = useState<string | null>(null);
@@ -1204,7 +1231,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
       if (q.type === QuestionType.MULTIPLE_CHOICE || q.type === QuestionType.MULTIPLE_RESPONSE) {
         const opts = q.options || [];
         setQOptionsText(opts.join('\n'));
-        const ansText = Array.isArray(q.correctAnswer) ? q.correctAnswer.join(',') : q.correctAnswer.toString();
+        const ansText = Array.isArray(q.correctAnswer) ? q.correctAnswer.join(',') : q.correctAnswer?.toString() || '';
         setQCorrectAnsText(ansText);
         
         const extendedOpts = [...opts];
@@ -1259,7 +1286,7 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
         setIsVideoMrq(q.options?.isMultipleResponse || false);
         
         setQOptionsText(opts.join('\n'));
-        const ansText = Array.isArray(q.correctAnswer) ? q.correctAnswer.join(',') : q.correctAnswer.toString();
+        const ansText = Array.isArray(q.correctAnswer) ? q.correctAnswer.join(',') : q.correctAnswer?.toString() || '';
         setQCorrectAnsText(ansText);
         
         const extendedOpts = [...opts];
@@ -1267,6 +1294,30 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
           extendedOpts.push('', '', '', '');
         }
         setMcqOpts(extendedOpts);
+      } else if (q.type === QuestionType.CATEGORIZATION) {
+        const cats = q.options?.categories || ['Thiết bị nhập', 'Thiết bị xuất'];
+        const items = q.options?.items || [];
+        const corr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [];
+        setCatCategories(cats);
+        setCatItems(items.map((item: string, idx: number) => ({
+          text: item,
+          categoryIdx: corr[idx] ?? 0
+        })));
+      } else if (q.type === QuestionType.HOTSPOT) {
+        setHotspotSpots(q.options?.spots || []);
+      } else if (q.type === QuestionType.MATCH_IMAGE) {
+        const texts = q.options?.texts || [];
+        const images = q.options?.images || [];
+        const corr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [];
+        const pairs = texts.map((t: string, idx: number) => ({
+          text: t,
+          imageUrl: images[corr[idx]] || ''
+        }));
+        setMatchImgPairs(pairs);
+      } else if (q.type === QuestionType.MATRIX_SELECTION) {
+        setMatrixRows(q.options?.rows || []);
+        setMatrixCols(q.options?.columns || []);
+        setMatrixCorrect(Array.isArray(q.correctAnswer) ? q.correctAnswer : []);
       }
     } else {
       setEditingQuestion(null);
@@ -1423,6 +1474,26 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
           }
           parsedCorrectAnswer = isNaN(parsedIdx) ? 0 : parsedIdx;
         }
+      } else if (qType === QuestionType.CATEGORIZATION) {
+        const filteredCats = catCategories.map(c => c.trim()).filter(Boolean);
+        const filteredItems = catItems.map(i => i.text.trim()).filter(Boolean);
+        const corr = catItems.filter(i => i.text.trim()).map(i => i.categoryIdx);
+        parsedOptions = { categories: filteredCats, items: filteredItems };
+        parsedCorrectAnswer = corr;
+      } else if (qType === QuestionType.HOTSPOT) {
+        parsedOptions = { spots: hotspotSpots };
+        parsedCorrectAnswer = hotspotSpots.map((s, idx) => s.isCorrect ? idx : -1).filter(idx => idx !== -1);
+      } else if (qType === QuestionType.MATCH_IMAGE) {
+        const validPairs = matchImgPairs.filter(p => p.text.trim() && p.imageUrl.trim());
+        const texts = validPairs.map(p => p.text.trim());
+        const images = validPairs.map(p => p.imageUrl.trim());
+        parsedOptions = { texts, images };
+        parsedCorrectAnswer = texts.map((_, i) => i);
+      } else if (qType === QuestionType.MATRIX_SELECTION) {
+        const rows = matrixRows.map(r => r.trim()).filter(Boolean);
+        const cols = matrixCols.map(c => c.trim()).filter(Boolean);
+        parsedOptions = { rows, columns: cols };
+        parsedCorrectAnswer = matrixCorrect.slice(0, rows.length);
       }
 
       return {
@@ -1450,6 +1521,109 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
       setPreviewingQuestionObj(qObj);
     }
   };
+
+  const handleSpotMouseDown = (e: React.MouseEvent, idx: number) => {
+    e.preventDefault();
+    if (!hotspotEditorContainerRef.current) return;
+    
+    const rect = hotspotEditorContainerRef.current.getBoundingClientRect();
+    const currentXPct = ((e.clientX - rect.left) / rect.width) * 100;
+    const currentYPct = ((e.clientY - rect.top) / rect.height) * 100;
+    
+    const spot = hotspotSpots[idx];
+    if (spot) {
+      setActiveDragIdx(idx);
+      setDragStartPercent({ x: currentXPct, y: currentYPct });
+      setSpotStartCoords({ x: spot.x, y: spot.y, w: spot.w, h: spot.h });
+    }
+  };
+
+  const handleResizeMouseDown = (e: React.MouseEvent, idx: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!hotspotEditorContainerRef.current) return;
+    
+    const rect = hotspotEditorContainerRef.current.getBoundingClientRect();
+    const currentXPct = ((e.clientX - rect.left) / rect.width) * 100;
+    const currentYPct = ((e.clientY - rect.top) / rect.height) * 100;
+    
+    const spot = hotspotSpots[idx];
+    if (spot) {
+      setActiveResizeIdx(idx);
+      setDragStartPercent({ x: currentXPct, y: currentYPct });
+      setSpotStartCoords({ x: spot.x, y: spot.y, w: spot.w, h: spot.h });
+    }
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!hotspotEditorContainerRef.current) return;
+      
+      const rect = hotspotEditorContainerRef.current.getBoundingClientRect();
+      const currentXPct = ((e.clientX - rect.left) / rect.width) * 100;
+      const currentYPct = ((e.clientY - rect.top) / rect.height) * 100;
+      
+      if (activeDragIdx !== null) {
+        const deltaX = currentXPct - dragStartPercent.x;
+        const deltaY = currentYPct - dragStartPercent.y;
+        
+        setHotspotSpots(prev => {
+          const nextSpots = [...prev];
+          const spot = nextSpots[activeDragIdx];
+          if (spot) {
+            let newX = Math.max(0, Math.min(100 - spot.w, spotStartCoords.x + deltaX));
+            let newY = Math.max(0, Math.min(100 - spot.h, spotStartCoords.y + deltaY));
+            nextSpots[activeDragIdx] = {
+              ...spot,
+              x: Math.round(newX),
+              y: Math.round(newY)
+            };
+          }
+          return nextSpots;
+        });
+      }
+      
+      if (activeResizeIdx !== null) {
+        const deltaX = currentXPct - dragStartPercent.x;
+        const deltaY = currentYPct - dragStartPercent.y;
+        
+        setHotspotSpots(prev => {
+          const nextSpots = [...prev];
+          const spot = nextSpots[activeResizeIdx];
+          if (spot) {
+            let newW = Math.max(5, Math.min(100 - spotStartCoords.x, spotStartCoords.w + deltaX));
+            let newH = Math.max(5, Math.min(100 - spotStartCoords.y, spotStartCoords.h + deltaY));
+            nextSpots[activeResizeIdx] = {
+              ...spot,
+              w: Math.round(newW),
+              h: Math.round(newH)
+            };
+          }
+          return nextSpots;
+        });
+      }
+    };
+
+    const handleMouseUp = () => {
+      if (activeDragIdx !== null || activeResizeIdx !== null) {
+        setActiveDragIdx(null);
+        setActiveResizeIdx(null);
+        if (typeof handlePreviewQuestion === 'function') {
+          handlePreviewQuestion();
+        }
+      }
+    };
+
+    if (activeDragIdx !== null || activeResizeIdx !== null) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [activeDragIdx, activeResizeIdx, dragStartPercent, spotStartCoords, handlePreviewQuestion]);
 
   const handleSaveQuestion = () => {
     const qObj = buildQuestionObjectFromForm(true);
@@ -2343,6 +2517,10 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                       <option value={QuestionType.SEQUENCE}>5. Sequence Ordering</option>
                       <option value={QuestionType.TRUE_FALSE_MULTIPLE}>6. True/False Multiple</option>
                       <option value={QuestionType.VIDEO_BASED}>7. Video Based</option>
+                      <option value={QuestionType.CATEGORIZATION}>8. Categorization</option>
+                      <option value={QuestionType.HOTSPOT}>9. Hotspot</option>
+                      <option value={QuestionType.MATCH_IMAGE}>10. Match Image To Text</option>
+                      <option value={QuestionType.MATRIX_SELECTION}>11. Matrix Selection</option>
                     </select>
                   </div>
                   <div>
@@ -2432,6 +2610,18 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                   )}
                   {qType === QuestionType.SEQUENCE && (
                     <p>• <strong>Các bước:</strong> Nhập các bước theo đúng trình tự từ trước đến sau. Hệ thống sẽ tự động xáo trộn khi hiển thị.</p>
+                  )}
+                  {qType === QuestionType.CATEGORIZATION && (
+                    <p>• <strong>Phân loại (Categorization):</strong> Định nghĩa các nhóm (ví dụ: Thiết bị nhập, Thiết bị xuất) và gán từng mục vào nhóm chính xác.</p>
+                  )}
+                  {qType === QuestionType.HOTSPOT && (
+                    <p>• <strong>Vùng Chọn (Hotspot):</strong> Đảm bảo đã điền &quot;Hình Ảnh Đính Kèm&quot;. Sau đó tạo và vẽ trực tiếp các vùng chọn (Rounded Rectangle) trên ảnh, đánh dấu vùng Đúng.</p>
+                  )}
+                  {qType === QuestionType.MATCH_IMAGE && (
+                    <p>• <strong>Ghép Ảnh với Chữ:</strong> Tạo các cặp nhãn chữ và link ảnh tương ứng. Người dùng sẽ kéo thả nhãn vào đúng ảnh.</p>
+                  )}
+                  {qType === QuestionType.MATRIX_SELECTION && (
+                    <p>• <strong>Bảng Chọn Ma Trận (Matrix):</strong> Nhập danh sách Hàng (Rows) và Cột (Columns). Chọn radio tương ứng để xác định đáp án đúng cho từng hàng.</p>
                   )}
                 
                 {(qType === QuestionType.MULTIPLE_CHOICE || qType === QuestionType.MULTIPLE_RESPONSE) && (
@@ -3038,8 +3228,542 @@ export default function AdminDashboard({ adminData, onLogout }: AdminDashboardPr
                   </div>
                 )}
 
+                {qType === QuestionType.CATEGORIZATION && (
+                  <div className="space-y-4 p-5 bg-slate-50 border border-slate-200 rounded-3xl shadow-sm">
+                    {/* Categories section */}
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center pb-2 border-b">
+                        <label className="block text-[11px] font-black text-indigo-700 uppercase">CÁC NHÓM PHÂN LOẠI</label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCatCategories([...catCategories, '']);
+                            setTimeout(() => handlePreviewQuestion(), 50);
+                          }}
+                          className="text-[9px] py-1 px-2.5 bg-indigo-600 text-white font-extrabold rounded-lg shadow-sm"
+                        >
+                          + Thêm Nhóm
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {catCategories.map((cat, idx) => (
+                          <div key={idx} className="flex items-center gap-1.5 bg-white p-1.5 border border-slate-200 rounded-xl">
+                            <input
+                              type="text"
+                              value={cat}
+                              onChange={(e) => {
+                                const next = [...catCategories];
+                                next[idx] = e.target.value;
+                                setCatCategories(next);
+                                setTimeout(() => handlePreviewQuestion(), 50);
+                              }}
+                              placeholder={`Nhóm ${idx + 1}`}
+                              className="flex-1 text-xs font-bold bg-transparent outline-none p-1"
+                            />
+                            {catCategories.length > 2 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCatCategories(catCategories.filter((_, i) => i !== idx));
+                                  setTimeout(() => handlePreviewQuestion(), 50);
+                                }}
+                                className="text-rose-500 hover:text-rose-700 p-1 text-xs font-bold"
+                              >
+                                &times;
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Items section */}
+                    <div className="space-y-2 mt-4">
+                      <div className="flex justify-between items-center pb-2 border-b">
+                        <label className="block text-[11px] font-black text-indigo-700 uppercase">DANH SÁCH MỤC CẦN PHÂN LOẠI</label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCatItems([...catItems, { text: '', categoryIdx: 0 }]);
+                            setTimeout(() => handlePreviewQuestion(), 50);
+                          }}
+                          className="text-[9px] py-1 px-2.5 bg-indigo-600 text-white font-extrabold rounded-lg shadow-sm"
+                        >
+                          + Thêm Mục
+                        </button>
+                      </div>
+                      <div className="space-y-2 max-h-[250px] overflow-y-auto">
+                        {catItems.map((item, idx) => (
+                          <div key={idx} className="flex items-center gap-2 bg-white p-2 border border-slate-200 rounded-xl">
+                            <input
+                              type="text"
+                              value={item.text}
+                              onChange={(e) => {
+                                const next = [...catItems];
+                                if (next[idx]) {
+                                  next[idx].text = e.target.value;
+                                }
+                                setCatItems(next);
+                                setTimeout(() => handlePreviewQuestion(), 50);
+                              }}
+                              placeholder="Tên mục (Ví dụ: Bàn phím...)"
+                              className="flex-1 text-xs font-bold bg-transparent outline-none p-1 border-b border-transparent focus:border-indigo-400"
+                            />
+                            <select
+                              value={item.categoryIdx}
+                              onChange={(e) => {
+                                const next = [...catItems];
+                                if (next[idx]) {
+                                  next[idx].categoryIdx = parseInt(e.target.value);
+                                }
+                                setCatItems(next);
+                                setTimeout(() => handlePreviewQuestion(), 50);
+                              }}
+                              className="p-1.5 border border-slate-200 rounded-lg text-[10px] font-bold text-slate-700 bg-slate-50"
+                            >
+                              {catCategories.map((cat, cIdx) => (
+                                <option key={cIdx} value={cIdx}>
+                                  {cat || `Nhóm ${cIdx + 1}`}
+                                </option>
+                              ))}
+                            </select>
+                            {catItems.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCatItems(catItems.filter((_, i) => i !== idx));
+                                  setTimeout(() => handlePreviewQuestion(), 50);
+                                }}
+                                className="text-rose-500 hover:text-rose-700 p-1 text-sm"
+                              >
+                                &times;
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {qType === QuestionType.HOTSPOT && (
+                  <div className="space-y-4 p-5 bg-slate-50 border border-slate-200 rounded-3xl shadow-sm">
+                    <div className="flex justify-between items-center pb-2 border-b">
+                      <div>
+                        <label className="block text-[11px] font-black text-indigo-700 uppercase">DANH SÁCH VÙNG CHỌN (HOTSPOTS)</label>
+                        <span className="text-[10px] text-slate-400 font-bold block mt-0.5">
+                          Tạo vùng click và tick chọn vùng đúng làm đáp án.
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHotspotSpots([...hotspotSpots, { label: `Vùng ${hotspotSpots.length + 1}`, x: 30, y: 30, w: 20, h: 20, isCorrect: false }]);
+                          setTimeout(() => handlePreviewQuestion(), 50);
+                        }}
+                        className="text-[9px] py-1 px-2.5 bg-indigo-600 text-white font-extrabold rounded-lg shadow-sm"
+                      >
+                        + Thêm Vùng
+                      </button>
+                    </div>
+
+                    {!qImage.trim() ? (
+                      <div className="p-4 bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold rounded-2xl">
+                        ⚠️ Hãy nhập URL Hình Ảnh Đính Kèm ở phía trên để vẽ và xem trước các Vùng Chọn!
+                      </div>
+                    ) : (
+                      <div className="space-y-1">
+                        <span className="text-[10px] text-indigo-600 font-extrabold block">💡 Hướng dẫn: Nhấp và kéo vùng chọn để di chuyển trực tiếp; kéo góc dưới bên phải (↘) của vùng để thu phóng kích thước!</span>
+                        <div 
+                          ref={hotspotEditorContainerRef}
+                          className="relative border-2 border-slate-200 rounded-2xl overflow-hidden bg-slate-150 aspect-video group"
+                        >
+                          <img src={qImage} alt="Hotspot preview" className="w-full h-full object-contain select-none pointer-events-none" />
+                          {hotspotSpots.map((spot, idx) => (
+                            <div
+                              key={idx}
+                              style={{
+                                left: `${spot.x}%`,
+                                top: `${spot.y}%`,
+                                width: `${spot.w}%`,
+                                height: `${spot.h}%`,
+                              }}
+                              onMouseDown={(e) => handleSpotMouseDown(e, idx)}
+                              title={`${spot.label || idx + 1} (Giữ chuột để di chuyển)`}
+                              className={`absolute border-2 flex items-center justify-center text-[10px] font-black text-white cursor-move select-none rounded-lg shadow-md transition-shadow active:shadow-lg
+                                ${spot.isCorrect 
+                                  ? 'bg-emerald-500/25 border-emerald-500 shadow-emerald-500/20' 
+                                  : 'bg-indigo-500/20 border-indigo-500'
+                                }`}
+                            >
+                              <span className="bg-black/60 px-1 py-0.5 rounded text-[8px] font-semibold pointer-events-none">{spot.label || idx + 1}</span>
+                              
+                              {/* Resize Handle */}
+                              <div
+                                onMouseDown={(e) => handleResizeMouseDown(e, idx)}
+                                title="Kéo để đổi kích thước"
+                                className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-white border border-slate-400 cursor-se-resize rounded-tl flex items-center justify-center z-10 shadow-sm"
+                              >
+                                <span className="text-[7px] text-slate-500 font-bold">↘</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="space-y-3 max-h-[300px] overflow-y-auto">
+                      {hotspotSpots.map((spot, idx) => (
+                        <div key={idx} className="bg-white p-3 border border-slate-200 rounded-2xl space-y-2 shadow-sm">
+                          <div className="flex items-center justify-between gap-2 border-b pb-2">
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-600 text-[10px] font-bold flex items-center justify-center">
+                                {idx + 1}
+                              </span>
+                              <input
+                                type="text"
+                                value={spot.label}
+                                onChange={(e) => {
+                                  const next = [...hotspotSpots];
+                                  if (next[idx]) {
+                                    next[idx].label = e.target.value;
+                                  }
+                                  setHotspotSpots(next);
+                                  setTimeout(() => handlePreviewQuestion(), 50);
+                                }}
+                                placeholder="Nhãn vùng (vd: CPU...)"
+                                className="text-xs font-black p-1 border-b border-transparent focus:border-indigo-400 outline-none w-32"
+                              />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <label className="flex items-center gap-1 text-[10px] font-bold text-slate-600 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={spot.isCorrect}
+                                  onChange={(e) => {
+                                    const next = [...hotspotSpots];
+                                    if (next[idx]) {
+                                      next[idx].isCorrect = e.target.checked;
+                                    }
+                                    setHotspotSpots(next);
+                                    setTimeout(() => handlePreviewQuestion(), 50);
+                                  }}
+                                  className="w-3.5 h-3.5 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
+                                />
+                                Đáp án đúng
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setHotspotSpots(hotspotSpots.filter((_, i) => i !== idx));
+                                  setTimeout(() => handlePreviewQuestion(), 50);
+                                }}
+                                className="text-rose-500 hover:text-rose-700 text-xs font-bold"
+                              >
+                                Xóa
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-4 gap-2 text-[10px]">
+                            <div>
+                              <span className="block font-bold text-slate-400 mb-1">X (Trái): {spot.x}%</span>
+                              <input
+                                type="range" min="0" max="100" value={spot.x}
+                                onChange={(e) => {
+                                  const next = [...hotspotSpots];
+                                  if (next[idx]) {
+                                    next[idx].x = parseInt(e.target.value);
+                                  }
+                                  setHotspotSpots(next);
+                                  setTimeout(() => handlePreviewQuestion(), 50);
+                                }}
+                                className="w-full accent-indigo-600"
+                              />
+                            </div>
+                            <div>
+                              <span className="block font-bold text-slate-400 mb-1">Y (Trên): {spot.y}%</span>
+                              <input
+                                type="range" min="0" max="100" value={spot.y}
+                                onChange={(e) => {
+                                  const next = [...hotspotSpots];
+                                  if (next[idx]) {
+                                    next[idx].y = parseInt(e.target.value);
+                                  }
+                                  setHotspotSpots(next);
+                                  setTimeout(() => handlePreviewQuestion(), 50);
+                                }}
+                                className="w-full accent-indigo-600"
+                              />
+                            </div>
+                            <div>
+                              <span className="block font-bold text-slate-400 mb-1">Rộng: {spot.w}%</span>
+                              <input
+                                type="range" min="5" max="100" value={spot.w}
+                                onChange={(e) => {
+                                  const next = [...hotspotSpots];
+                                  if (next[idx]) {
+                                    next[idx].w = parseInt(e.target.value);
+                                  }
+                                  setHotspotSpots(next);
+                                  setTimeout(() => handlePreviewQuestion(), 50);
+                                }}
+                                className="w-full accent-indigo-600"
+                              />
+                            </div>
+                            <div>
+                              <span className="block font-bold text-slate-400 mb-1">Cao: {spot.h}%</span>
+                              <input
+                                type="range" min="5" max="100" value={spot.h}
+                                onChange={(e) => {
+                                  const next = [...hotspotSpots];
+                                  if (next[idx]) {
+                                    next[idx].h = parseInt(e.target.value);
+                                  }
+                                  setHotspotSpots(next);
+                                  setTimeout(() => handlePreviewQuestion(), 50);
+                                }}
+                                className="w-full accent-indigo-600"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {qType === QuestionType.MATCH_IMAGE && (
+                  <div className="space-y-4 p-5 bg-slate-50 border border-slate-200 rounded-3xl shadow-sm">
+                    <div className="flex justify-between items-center pb-2 border-b">
+                      <div>
+                        <label className="block text-[11px] font-black text-indigo-700 uppercase">DANH SÁCH CẶP GHÉP ẢNH & CHỮ</label>
+                        <span className="text-[10px] text-slate-400 font-bold block mt-0.5">
+                          Nhập tên nhãn chữ và liên kết hình ảnh tương ứng.
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMatchImgPairs([...matchImgPairs, { text: '', imageUrl: '' }]);
+                          setTimeout(() => handlePreviewQuestion(), 50);
+                        }}
+                        className="text-[9px] py-1 px-2.5 bg-indigo-600 text-white font-extrabold rounded-lg shadow-sm"
+                      >
+                        + Thêm Cặp
+                      </button>
+                    </div>
+
+                    <div className="space-y-3 max-h-[300px] overflow-y-auto">
+                      {matchImgPairs.map((pair, idx) => (
+                        <div key={idx} className="bg-white p-3 border border-slate-200 rounded-2xl flex gap-3 items-start shadow-sm group">
+                          <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-600 text-[10px] font-bold flex items-center justify-center mt-1">
+                            {idx + 1}
+                          </span>
+                          <div className="flex-1 space-y-2">
+                            <input
+                              type="text"
+                              value={pair.text}
+                              onChange={(e) => {
+                                const next = [...matchImgPairs];
+                                if (next[idx]) {
+                                  next[idx].text = e.target.value;
+                                }
+                                setMatchImgPairs(next);
+                                setTimeout(() => handlePreviewQuestion(), 50);
+                              }}
+                              placeholder="Tên nhãn chữ (vd: USB Port...)"
+                              className="w-full text-xs font-bold p-1.5 border border-slate-200 rounded-lg outline-none focus:border-indigo-400"
+                            />
+                            <input
+                              type="text"
+                              value={pair.imageUrl}
+                              onChange={(e) => {
+                                const next = [...matchImgPairs];
+                                if (next[idx]) {
+                                  next[idx].imageUrl = e.target.value;
+                                }
+                                setMatchImgPairs(next);
+                                setTimeout(() => handlePreviewQuestion(), 50);
+                              }}
+                              placeholder="Link hình ảnh tương ứng..."
+                              className="w-full text-xs p-1.5 border border-slate-200 rounded-lg outline-none focus:border-indigo-400 font-mono text-[10px]"
+                            />
+                          </div>
+                          <div className="flex flex-col items-center gap-2">
+                            <div className="w-12 h-12 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden flex items-center justify-center shrink-0">
+                              {pair.imageUrl ? (
+                                <img src={pair.imageUrl} alt="Thumbnail" className="w-full h-full object-cover" />
+                              ) : (
+                                <span className="text-[9px] text-slate-400">No image</span>
+                              )}
+                            </div>
+                            {matchImgPairs.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setMatchImgPairs(matchImgPairs.filter((_, i) => i !== idx));
+                                  setTimeout(() => handlePreviewQuestion(), 50);
+                                }}
+                                className="text-rose-500 hover:text-rose-700 text-xs font-bold"
+                              >
+                                Xóa
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {qType === QuestionType.MATRIX_SELECTION && (
+                  <div className="space-y-4 p-5 bg-slate-50 border border-slate-200 rounded-3xl shadow-sm">
+                    {/* Rows */}
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center pb-1.5 border-b">
+                        <label className="block text-[11px] font-black text-indigo-700 uppercase">DANH SÁCH CÁC HÀNG (ROWS)</label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextRows = [...matrixRows, ''];
+                            setMatrixRows(nextRows);
+                            setMatrixCorrect([...matrixCorrect, 0]);
+                            setTimeout(() => handlePreviewQuestion(), 50);
+                          }}
+                          className="text-[9px] py-1 px-2 bg-indigo-600 text-white font-bold rounded-lg"
+                        >
+                          + Thêm Hàng
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 max-h-[120px] overflow-y-auto">
+                        {matrixRows.map((row, idx) => (
+                          <div key={idx} className="flex items-center gap-1.5 bg-white p-1 border border-slate-200 rounded-xl">
+                            <input
+                              type="text"
+                              value={row}
+                              onChange={(e) => {
+                                const next = [...matrixRows];
+                                next[idx] = e.target.value;
+                                setMatrixRows(next);
+                                setTimeout(() => handlePreviewQuestion(), 50);
+                              }}
+                              placeholder={`Hàng ${idx + 1}`}
+                              className="flex-1 text-xs font-bold bg-transparent outline-none p-1"
+                            />
+                            {matrixRows.length > 2 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setMatrixRows(matrixRows.filter((_, i) => i !== idx));
+                                  setMatrixCorrect(matrixCorrect.filter((_, i) => i !== idx));
+                                  setTimeout(() => handlePreviewQuestion(), 50);
+                                }}
+                                className="text-rose-500 hover:text-rose-700 text-xs font-bold"
+                              >
+                                &times;
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Columns */}
+                    <div className="space-y-2 mt-3">
+                      <div className="flex justify-between items-center pb-1.5 border-b">
+                        <label className="block text-[11px] font-black text-indigo-700 uppercase">DANH SÁCH CÁC CỘT (COLUMNS)</label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMatrixCols([...matrixCols, '']);
+                            setTimeout(() => handlePreviewQuestion(), 50);
+                          }}
+                          className="text-[9px] py-1 px-2 bg-indigo-600 text-white font-bold rounded-lg"
+                        >
+                          + Thêm Cột
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 max-h-[120px] overflow-y-auto">
+                        {matrixCols.map((col, idx) => (
+                          <div key={idx} className="flex items-center gap-1.5 bg-white p-1 border border-slate-200 rounded-xl">
+                            <input
+                              type="text"
+                              value={col}
+                              onChange={(e) => {
+                                const next = [...matrixCols];
+                                next[idx] = e.target.value;
+                                setMatrixCols(next);
+                                setTimeout(() => handlePreviewQuestion(), 50);
+                              }}
+                              placeholder={`Cột ${idx + 1}`}
+                              className="flex-1 text-xs font-bold bg-transparent outline-none p-1"
+                            />
+                            {matrixCols.length > 2 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setMatrixCols(matrixCols.filter((_, i) => i !== idx));
+                                  setTimeout(() => handlePreviewQuestion(), 50);
+                                }}
+                                className="text-rose-500 hover:text-rose-700 text-xs font-bold"
+                              >
+                                &times;
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Matrix Answers Grid */}
+                    <div className="space-y-2 mt-4">
+                      <label className="block text-[11px] font-black text-indigo-700 uppercase">CẤU HÌNH ĐÁP ÁN ĐÚNG</label>
+                      <div className="bg-white border rounded-2xl overflow-x-auto shadow-inner p-3">
+                        <table className="w-full text-left border-collapse">
+                          <thead>
+                            <tr>
+                              <th className="p-2 border-b text-[10px] font-black text-slate-400">Hàng / Cột</th>
+                              {matrixCols.map((col, idx) => (
+                                <th key={idx} className="p-2 border-b text-[10px] font-black text-slate-600 text-center">
+                                  {col || `Cột ${idx + 1}`}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {matrixRows.map((row, rIdx) => (
+                              <tr key={rIdx} className="hover:bg-slate-50">
+                                <td className="p-2 border-b text-xs font-bold text-slate-700">
+                                  {row || `Hàng ${rIdx + 1}`}
+                                </td>
+                                {matrixCols.map((_, cIdx) => (
+                                  <td key={cIdx} className="p-2 border-b text-center">
+                                    <input
+                                      type="radio"
+                                      name={`row_ans_${rIdx}`}
+                                      checked={matrixCorrect[rIdx] === cIdx}
+                                      onChange={() => {
+                                        const next = [...matrixCorrect];
+                                        next[rIdx] = cIdx;
+                                        setMatrixCorrect(next);
+                                        setTimeout(() => handlePreviewQuestion(), 50);
+                                      }}
+                                      className="w-4 h-4 text-indigo-600 border-slate-300 focus:ring-indigo-500"
+                                    />
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Fallback field - only for unsupported types if any */}
-                {!['multiple_choice', 'multiple_response', 'true_false', 'matching', 'sequence', 'true_false_multiple', 'video_based'].includes(qType) && (
+                {!['multiple_choice', 'multiple_response', 'true_false', 'matching', 'sequence', 'true_false_multiple', 'video_based', 'categorization', 'hotspot', 'match_image', 'matrix_selection'].includes(qType) && (
                   <div className="space-y-1">
                     <label className="block text-[10px] font-black text-slate-500 uppercase">Đáp án đúng cấu hình:</label>
                     <input

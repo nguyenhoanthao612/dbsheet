@@ -8,6 +8,10 @@ export enum QuestionType {
   SEQUENCE = 'sequence',
   TRUE_FALSE_MULTIPLE = 'true_false_multiple',
   VIDEO_BASED = 'video_based',
+  CATEGORIZATION = 'categorization',
+  HOTSPOT = 'hotspot',
+  MATCH_IMAGE = 'match_image',
+  MATRIX_SELECTION = 'matrix_selection',
 }
 
 export enum IC3Category {
@@ -178,53 +182,53 @@ export function initDB() {
 export function getStudents(): Student[] {
   if (typeof window === 'undefined') return [];
   initDB();
-  return JSON.parse(localStorage.getItem('ic3_students') || '[]');
+  return (JSON.parse(localStorage.getItem('ic3_students') || '[]') as Student[]).filter(Boolean);
 }
 
 export function saveStudents(students: Student[]) {
   if (typeof window === 'undefined') return;
-  localStorage.setItem('ic3_students', JSON.stringify(students));
+  localStorage.setItem('ic3_students', JSON.stringify(students.filter(Boolean)));
 }
 
 // 2. Admin
 export function getAdmins(): Admin[] {
   if (typeof window === 'undefined') return [];
   initDB();
-  return JSON.parse(localStorage.getItem('ic3_admins') || '[]');
+  return (JSON.parse(localStorage.getItem('ic3_admins') || '[]') as Admin[]).filter(Boolean);
 }
 
 // 3. Đề ôn tập
 export function getTests(): Test[] {
   if (typeof window === 'undefined') return [];
   initDB();
-  return JSON.parse(localStorage.getItem('ic3_tests') || '[]');
+  return (JSON.parse(localStorage.getItem('ic3_tests') || '[]') as Test[]).filter(Boolean);
 }
 
 export function saveTests(tests: Test[]) {
   if (typeof window === 'undefined') return;
-  localStorage.setItem('ic3_tests', JSON.stringify(tests));
+  localStorage.setItem('ic3_tests', JSON.stringify(tests.filter(Boolean)));
 }
 
 // 4. Câu hỏi
 export function getQuestions(): Question[] {
   if (typeof window === 'undefined') return [];
   initDB();
-  return JSON.parse(localStorage.getItem('ic3_questions') || '[]');
+  return (JSON.parse(localStorage.getItem('ic3_questions') || '[]') as Question[]).filter(Boolean);
 }
 
 export function saveQuestions(questions: Question[]) {
   if (typeof window === 'undefined') return;
-  localStorage.setItem('ic3_questions', JSON.stringify(questions));
+  localStorage.setItem('ic3_questions', JSON.stringify(questions.filter(Boolean)));
 }
 
 // 5. Kết quả thi
 export function getTestResults(): TestResult[] {
   if (typeof window === 'undefined') return [];
   initDB();
-  return JSON.parse(localStorage.getItem('ic3_results') || '[]');
+  return (JSON.parse(localStorage.getItem('ic3_results') || '[]') as TestResult[]).filter(Boolean);
 }
 
 export function saveTestResults(results: TestResult[]) {
   if (typeof window === 'undefined') return;
-  localStorage.setItem('ic3_results', JSON.stringify(results));
+  localStorage.setItem('ic3_results', JSON.stringify(results.filter(Boolean)));
 }

@@ -67,6 +67,10 @@ export function mapSheetQuestionType(typeStr: any): QuestionType {
   if (str.includes('matching') || str.includes('ghépcặp') || str.includes('nối')) return QuestionType.MATCHING;
   if (str.includes('sequence') || str.includes('sắpxếp') || str.includes('thứtự')) return QuestionType.SEQUENCE;
   if (str.includes('video')) return QuestionType.VIDEO_BASED;
+  if (str.includes('categorization') || str.includes('phânloại')) return QuestionType.CATEGORIZATION;
+  if (str.includes('hotspot') || str.includes('điểmnóng')) return QuestionType.HOTSPOT;
+  if (str.includes('matchimage') || str.includes('ghépảnh') || str.includes('ghéphình')) return QuestionType.MATCH_IMAGE;
+  if (str.includes('matrix') || str.includes('matrận')) return QuestionType.MATRIX_SELECTION;
   return QuestionType.MULTIPLE_CHOICE;
 }
 
@@ -329,8 +333,11 @@ export async function fetchQuestionsFromGoogleSheet(sheetName: string, testCode:
     }
     if (!Array.isArray(rawQuestions)) return [];
 
-    return rawQuestions.map((q: any, idx: number) => {
-      const qType = mapSheetQuestionType(q.type);
+    const validQuestions = rawQuestions.filter((q: any) => q !== null && typeof q === 'object');
+
+    return (validQuestions.map((q: any, idx: number) => {
+      try {
+        const qType = mapSheetQuestionType(q.type);
       
       // First, get raw dynamic options from legacy columns or a string
       const optionKeys = Object.keys(q)
@@ -619,20 +626,40 @@ export async function fetchQuestionsFromGoogleSheet(sheetName: string, testCode:
         }
         correctAnswer = correctSeq;
       }
+      else if (qType === QuestionType.CATEGORIZATION) {
+        options = parsedOptionsJson || { categories: [], items: [] };
+        correctAnswer = Array.isArray(parsedAnswerJson) ? parsedAnswerJson : [];
+      }
+      else if (qType === QuestionType.HOTSPOT) {
+        options = parsedOptionsJson || { spots: [] };
+        correctAnswer = Array.isArray(parsedAnswerJson) ? parsedAnswerJson : [];
+      }
+      else if (qType === QuestionType.MATCH_IMAGE) {
+        options = parsedOptionsJson || { texts: [], images: [] };
+        correctAnswer = Array.isArray(parsedAnswerJson) ? parsedAnswerJson : [];
+      }
+      else if (qType === QuestionType.MATRIX_SELECTION) {
+        options = parsedOptionsJson || { rows: [], columns: [] };
+        correctAnswer = Array.isArray(parsedAnswerJson) ? parsedAnswerJson : [];
+      }
 
-      return {
-        id: q.id || `q_${idx}`,
-        testId: testCode,
-        type: qType,
-        category: q.category ? mapSheetCategory(q.category) : IC3Category.COMPUTING_FUNDAMENTALS,
-        content: String(q.question || ''),
-        imageUrl: q.image || undefined,
-        options,
-        correctAnswer,
-        explanation: q.explanation || 'Hãy cố gắng rèn luyện thêm nhé!',
-        tip: q.tip || 'Mascot khuyên bạn nên ôn tập kỹ phần lý thuyết!'
-      };
-    });
+        return {
+          id: q.id || `q_${idx}`,
+          testId: testCode,
+          type: qType,
+          category: q.category ? mapSheetCategory(q.category) : IC3Category.COMPUTING_FUNDAMENTALS,
+          content: String(q.question || ''),
+          imageUrl: q.image || undefined,
+          options,
+          correctAnswer,
+          explanation: q.explanation || 'Hãy cố gắng rèn luyện thêm nhé!',
+          tip: q.tip || 'Mascot khuyên bạn nên ôn tập kỹ phần lý thuyết!'
+        };
+      } catch (err) {
+        console.error(`[Exam] Error parsing question row at index ${idx}:`, q, err);
+        return null;
+      }
+    }).filter(Boolean) as Question[]);
   } catch (error) {
     console.warn(`Error loading questions for sheet "${sheetName}":`, error);
     return [];
@@ -865,6 +892,10 @@ function serializeQuestionForSheet(question: Question, testCode: string) {
     // The sequence steps in correct order
     const orderedSteps = correctIndices.map(idx => opts[idx]).filter(Boolean);
     answerJson = JSON.stringify(orderedSteps);
+  }
+  else if (qType === QuestionType.CATEGORIZATION || qType === QuestionType.HOTSPOT || qType === QuestionType.MATCH_IMAGE || qType === QuestionType.MATRIX_SELECTION) {
+    optionsJson = JSON.stringify(question.options || {});
+    answerJson = JSON.stringify(question.correctAnswer || []);
   }
 
   const serialized: Record<string, any> = {

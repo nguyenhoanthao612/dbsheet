@@ -39,19 +39,21 @@ export default function Home() {
       if (savedUser && savedRole) {
         try {
           const parsedUser = JSON.parse(savedUser);
-          if (savedRole === 'student') {
-            const freshStudents = getStudents();
-            const fresh = freshStudents.find(s => s.id === parsedUser.id);
-            if (fresh) {
-              setCurrentUser(fresh);
-              setUserRole('student');
+          if (parsedUser) {
+            if (savedRole === 'student') {
+              const freshStudents = getStudents();
+              const fresh = freshStudents.find(s => s.id === parsedUser.id);
+              if (fresh) {
+                setCurrentUser(fresh);
+                setUserRole('student');
+              } else {
+                setCurrentUser(parsedUser);
+                setUserRole('student');
+              }
             } else {
               setCurrentUser(parsedUser);
-              setUserRole('student');
+              setUserRole('admin');
             }
-          } else {
-            setCurrentUser(parsedUser);
-            setUserRole('admin');
           }
         } catch (e) {
           console.warn("Lỗi phục hồi phiên đăng nhập: ", e);

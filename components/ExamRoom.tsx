@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Component, ErrorInfo, ReactNode } from 'react';
 import { Test, Question, getQuestions, getStudents, saveStudents, TestResult, getTestResults, saveTestResults, BADGES, Badge, getTests } from '../lib/db';
 import { fetchQuestionsFromGoogleSheet, saveResultToGoogleSheet, updateStudentInGoogleSheet } from '../lib/sheets';
 import { motion, AnimatePresence } from 'motion/react';
 import QuestionRenderer from './QuestionRenderer';
-import { Clock, ArrowLeft, ArrowRight, HelpCircle, Send, Award, CheckCircle2, XCircle, ChevronLeft, RefreshCw, Star, Sparkles, Flag } from 'lucide-react';
+import { Clock, ArrowLeft, ArrowRight, HelpCircle, Send, Award, CheckCircle2, XCircle, ChevronLeft, RefreshCw, Star, Sparkles, Flag, AlertTriangle } from 'lucide-react';
 
 interface ExamRoomProps {
   test: Test;
@@ -22,7 +22,7 @@ function shuffleArray<T>(array: T[]): T[] {
 }
 
 function shuffleQuestionsList(qList: Question[]): Question[] {
-  return qList.map(q => {
+  return qList.filter(Boolean).map(q => {
     // Clone question to avoid mutating the original database objects
     const cloned = JSON.parse(JSON.stringify(q)) as Question;
 
@@ -88,6 +88,34 @@ function shuffleQuestionsList(qList: Question[]): Question[] {
           cloned.options = shuffledSteps;
           cloned.correctAnswer = correctSteps.map((step: string) => shuffledSteps.indexOf(step));
         }
+      } else if (cloned.type === 'categorization') {
+        if (cloned.options && Array.isArray(cloned.options.items) && Array.isArray(cloned.correctAnswer)) {
+          const items: string[] = cloned.options.items;
+          const indices: number[] = items.map((_, i) => i);
+          const shuffledIndices = shuffleArray<number>(indices);
+          cloned.options.items = shuffledIndices.map(i => items[i]);
+          cloned.correctAnswer = shuffledIndices.map(i => cloned.correctAnswer[i]);
+        }
+      } else if (cloned.type === 'match_image') {
+        if (cloned.options && Array.isArray(cloned.options.images) && Array.isArray(cloned.correctAnswer)) {
+          const images: string[] = cloned.options.images;
+          const indices: number[] = images.map((_, i) => i);
+          const shuffledIndices = shuffleArray<number>(indices);
+          cloned.options.images = shuffledIndices.map(i => images[i]);
+          cloned.correctAnswer = cloned.correctAnswer.map((oldIdx: number) => {
+            return shuffledIndices.indexOf(oldIdx);
+          });
+        }
+      } else if (cloned.type === 'matrix_selection') {
+        if (cloned.options && Array.isArray(cloned.options.columns) && Array.isArray(cloned.correctAnswer)) {
+          const cols: string[] = cloned.options.columns;
+          const indices: number[] = cols.map((_, i) => i);
+          const shuffledIndices = shuffleArray<number>(indices);
+          cloned.options.columns = shuffledIndices.map(i => cols[i]);
+          cloned.correctAnswer = cloned.correctAnswer.map((oldIdx: number) => {
+            return shuffledIndices.indexOf(oldIdx);
+          });
+        }
       }
     } catch (err) {
       console.warn("Error shuffling question ID:", cloned.id, err);
@@ -97,33 +125,75 @@ function shuffleQuestionsList(qList: Question[]): Question[] {
   });
 }
 
-export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: ExamRoomProps) {
+interface ErrorBoundaryProps {
+  children: ReactNode;
+  onBack: () => void;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class ExamErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  public state: ErrorBoundaryState = {
+    hasError: false,
+    error: null
+  };
+
+  public static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("[ExamErrorBoundary] Caught error:", error, errorInfo);
+  }
+
+  public render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-6 text-center">
+          <div className="bg-rose-500/20 p-4 rounded-full mb-4">
+            <AlertTriangle className="w-12 h-12 text-rose-500" />
+          </div>
+          <h2 className="text-xl font-bold mb-2">Đã xảy ra lỗi khi tải bài thi</h2>
+          <div className="bg-slate-800 p-4 rounded-xl text-left font-mono text-xs text-rose-300 max-w-xl overflow-auto mb-6 w-full max-h-48">
+            {this.state.error?.toString()}
+          </div>
+          <div className="flex gap-4">
+            <button
+              onClick={() => this.setState({ hasError: false, error: null })}
+              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-xl font-bold transition-all text-sm cursor-pointer"
+            >
+              Thử lại
+            </button>
+            <button
+              onClick={this.props.onBack}
+              className="px-5 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl font-bold transition-all text-sm cursor-pointer"
+            >
+              Quay về Dashboard
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export default function ExamRoom(props: ExamRoomProps) {
+  return (
+    <ExamErrorBoundary onBack={props.onBackToDashboard}>
+      <ExamRoomContent {...props} />
+    </ExamErrorBoundary>
+  );
+}
+
+function ExamRoomContent({ test, studentId, mode, onBackToDashboard }: ExamRoomProps) {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    async function loadQuestions() {
-      setIsLoading(true);
-      try {
-        const sheetName = (test as any).sheetName || test.code;
-        const fetched = await fetchQuestionsFromGoogleSheet(sheetName, test.code);
-        if (fetched && fetched.length > 0) {
-          setQuestions(shuffleQuestionsList(fetched));
-        } else {
-          // Fallback to local questions if sheet fetching returns empty
-          const fallback = getQuestions().filter(q => q.testId === test.code);
-          setQuestions(shuffleQuestionsList(fallback));
-        }
-      } catch (err) {
-        console.warn('Error loading questions from Google Sheets:', err);
-        const fallback = getQuestions().filter(q => q.testId === test.code);
-        setQuestions(shuffleQuestionsList(fallback));
-      } finally {
-        setIsLoading(false);
-      }
-    }
-    loadQuestions();
-  }, [test]);
+  const [loadingError, setLoadingError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   const [currentIdx, setCurrentIdx] = useState(0);
   const [userAnswers, setUserAnswers] = useState<{ [qId: string]: any }>({});
@@ -135,6 +205,109 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
       [qId]: !prev[qId]
     }));
   };
+
+  useEffect(() => {
+    let isCancelled = false;
+    async function loadQuestions() {
+      console.log(`[Exam] Start loading exam`);
+      setIsLoading(true);
+      setLoadingError(null);
+      
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('TIMEOUT')), 15000)
+      );
+
+      try {
+        const sheetName = (test as any).sheetName || test.code;
+        console.log(`[Exam] Request sent`);
+        
+        const fetchPromise = fetchQuestionsFromGoogleSheet(sheetName, test.code);
+        
+        // Race fetch against 15-second timeout
+        const fetched = await Promise.race([fetchPromise, timeoutPromise]) as Question[];
+        if (isCancelled) return;
+        
+        console.log(`[Exam] Response received`);
+        
+        if (fetched && fetched.length > 0) {
+          console.log(`[Exam] Parsing data`);
+          const shuffled = shuffleQuestionsList(fetched);
+          console.log(`[Exam] Shuffle completed`);
+          setQuestions(shuffled);
+          console.log(`[Exam] Questions loaded: ${shuffled.length}`);
+        } else {
+          console.log(`[Exam] Response received - empty or invalid list. Attempting fallback...`);
+          const fallback = getQuestions().filter(q => q.testId === test.code);
+          if (fallback.length > 0) {
+             console.log(`[Exam] Parsing data`);
+             const shuffledFallback = shuffleQuestionsList(fallback);
+             console.log(`[Exam] Shuffle completed`);
+             setQuestions(shuffledFallback);
+             console.log(`[Exam] Questions loaded: ${shuffledFallback.length}`);
+          } else {
+             console.log(`[Exam] No fallback questions found.`);
+             setQuestions([]);
+          }
+        }
+      } catch (err: any) {
+        if (isCancelled) return;
+        console.error('[Exam] Error loading questions:', err);
+        if (err.message === 'TIMEOUT') {
+           setLoadingError('Quá thời gian tải dữ liệu (Timeout 15s). Vui lòng kiểm tra lại kết nối mạng hoặc Google Apps Script.');
+        } else {
+           setLoadingError(err.message || 'Lỗi không xác định khi tải dữ liệu. Có thể do lỗi mạng hoặc cấu hình Sheet.');
+        }
+        
+        console.log(`[Exam] Attempting fallback after error...`);
+        const fallback = getQuestions().filter(q => q.testId === test.code);
+        if (fallback.length > 0) {
+           console.log(`[Exam] Parsing data`);
+           const shuffledFallback = shuffleQuestionsList(fallback);
+           console.log(`[Exam] Shuffle completed`);
+           setQuestions(shuffledFallback);
+           console.log(`[Exam] Questions loaded: ${shuffledFallback.length}`);
+           setLoadingError(null); // Clear error since fallback worked
+        } else {
+           console.log(`[Exam] No fallback questions found after error.`);
+           setQuestions([]);
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsLoading(false);
+        }
+      }
+    }
+    loadQuestions();
+    
+    return () => {
+      isCancelled = true;
+    };
+  }, [test, retryCount]);
+
+  // Logging for question initialization
+  useEffect(() => {
+    if (questions.length > 0 && currentIdx < questions.length && currentIdx >= 0) {
+      console.log(`[Exam] Current question initialized`);
+    }
+  }, [questions, currentIdx]);
+
+  // Logging for render completion
+  useEffect(() => {
+    if (questions.length > 0 && !isLoading) {
+      console.log(`[Exam] Render completed`);
+    }
+  });
+
+  // Tự động kiểm tra và sửa currentIdx nếu bị out of bounds
+  useEffect(() => {
+    if (questions.length > 0 && (currentIdx >= questions.length || currentIdx < 0)) {
+      console.warn(`[Exam] currentIdx (${currentIdx}) is out of bounds (questions length: ${questions.length}). Auto-correcting to 0.`);
+      const timer = setTimeout(() => {
+        setCurrentIdx(0);
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [questions, currentIdx]);
 
   
   // Trạng thái nộp bài và xem kết quả
@@ -180,8 +353,27 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
         return uAns === q.correctAnswer;
       }
     }
-    if (q.type === 'matching' || q.type === 'sequence') {
+    if (q.type === 'matching' || q.type === 'sequence' || q.type === 'categorization' || q.type === 'match_image' || q.type === 'matrix_selection') {
       return JSON.stringify(uAns) === JSON.stringify(q.correctAnswer);
+    }
+    if (q.type === 'hotspot') {
+      if (uAns && typeof uAns === 'object' && 'x' in uAns && 'y' in uAns) {
+        const spots: any[] = q.options?.spots || [];
+        return spots.some((spot, idx) => {
+          const isCorr = spot.isCorrect || (Array.isArray(q.correctAnswer) ? q.correctAnswer.includes(idx) : q.correctAnswer === idx);
+          if (!isCorr) return false;
+          return (
+            uAns.x >= spot.x &&
+            uAns.x <= spot.x + spot.w &&
+            uAns.y >= spot.y &&
+            uAns.y <= spot.y + spot.h
+          );
+        });
+      }
+      const uArr = Array.isArray(uAns) ? uAns : (uAns !== undefined && uAns !== null ? [uAns] : []);
+      const cArr = Array.isArray(q.correctAnswer) ? q.correctAnswer : (q.correctAnswer !== undefined && q.correctAnswer !== null ? [q.correctAnswer] : []);
+      if (uArr.length !== cArr.length) return false;
+      return uArr.every((v: number) => cArr.includes(v));
     }
     return false;
   };
@@ -527,16 +719,68 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  if (questions.length === 0) {
+  if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center gap-4">
         <RefreshCw className="w-10 h-10 animate-spin text-indigo-400" />
-        <p className="text-slate-400 font-bold text-sm">Đang tải ngân hàng câu hỏi IC3 GS6...</p>
+        <p className="text-slate-400 font-bold text-sm">Đang tải câu hỏi...</p>
       </div>
     );
   }
 
-  const currentQuestion = questions[currentIdx];
+  if (loadingError && questions.length === 0) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center gap-4">
+        <div className="bg-rose-500/20 p-4 rounded-full">
+           <AlertTriangle className="w-12 h-12 text-rose-500" />
+        </div>
+        <p className="text-slate-200 font-bold text-lg">Không thể tải đề thi</p>
+        <p className="text-rose-400 text-sm max-w-md text-center">{loadingError}</p>
+        <div className="flex gap-4 mt-4">
+           <button onClick={() => setRetryCount(c => c + 1)} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-xl font-bold transition-colors">Thử lại</button>
+           <button onClick={onBackToDashboard} className="px-5 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl font-bold transition-colors">Quay về</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (questions.length === 0) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center gap-4">
+        <div className="bg-slate-800 p-4 rounded-full">
+           <AlertTriangle className="w-12 h-12 text-amber-500" />
+        </div>
+        <p className="text-slate-200 font-bold text-lg">Đề thi hiện chưa có câu hỏi</p>
+        <p className="text-slate-400 text-sm max-w-md text-center">Đề thi này chưa có dữ liệu câu hỏi hoặc không thể kết nối tới Google Sheets.</p>
+        <div className="flex gap-4 mt-4">
+           <button onClick={() => setRetryCount(c => c + 1)} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-xl font-bold transition-colors">Thử lại</button>
+           <button onClick={onBackToDashboard} className="px-5 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl font-bold transition-colors">Quay về Dashboard</button>
+        </div>
+      </div>
+    );
+  }
+
+  console.log("Questions:", questions);
+  console.log("Questions Length:", questions.length);
+  console.log("Current Index:", currentIdx);
+  const safeIdx = (currentIdx >= 0 && currentIdx < questions.length) ? currentIdx : 0;
+  const currentQuestion = questions[safeIdx];
+  console.log("Current Question:", currentQuestion);
+
+  if (!currentQuestion) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center gap-4">
+        <div className="bg-rose-500/20 p-4 rounded-full">
+           <AlertTriangle className="w-12 h-12 text-rose-500" />
+        </div>
+        <p className="text-slate-200 font-bold text-lg">Đã xảy ra lỗi khi tải câu hỏi</p>
+        <p className="text-rose-400 text-sm max-w-md text-center">Không tìm thấy câu hỏi hiện tại. Dữ liệu có thể bị lỗi.</p>
+        <div className="flex gap-4 mt-4">
+           <button onClick={onBackToDashboard} className="px-5 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl font-bold transition-colors">Quay về Dashboard</button>
+        </div>
+      </div>
+    );
+  }
   const totalQuestions = questions.length;
   const currentAnswer = userAnswers[currentQuestion.id];
   const isQuestionChecked = checkedAnswers[currentQuestion.id] || isSubmitted;
@@ -708,6 +952,7 @@ export default function ExamRoom({ test, studentId, mode, onBackToDashboard }: E
                 </div>
 
                 <QuestionRenderer
+                  key={currentQuestion.id}
                   question={currentQuestion}
                   userAnswer={currentAnswer}
                   onChangeAnswer={(ans) => handleAnswerChange(currentQuestion.id, ans)}

@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, Reorder } from 'motion/react';
 import { Question, QuestionType, IC3Category } from '../lib/db';
-import { Check, X, ArrowUp, ArrowDown, HelpCircle, Eye, AlertCircle, GripVertical } from 'lucide-react';
+import { Check, X, ArrowUp, ArrowDown, HelpCircle, Eye, AlertCircle, GripVertical, MapPin } from 'lucide-react';
 
 interface QuestionRendererProps {
   question: Question;
@@ -20,6 +20,8 @@ export default function QuestionRenderer({
   mode,
   onCheckAnswer,
 }: QuestionRendererProps) {
+  const hotspotContainerRef = useRef<HTMLDivElement>(null);
+
   // Trạng thái cục bộ cho Matching
   const [matchingSelections, setMatchingSelections] = useState<number[]>(() => {
     if (question.type === QuestionType.MATCHING) {
@@ -38,6 +40,9 @@ export default function QuestionRenderer({
     }
     return [];
   });
+
+  // Touch/Click source selection for drag & match / categorization / match image
+  const [selectedSourceIdx, setSelectedSourceIdx] = useState<number | null>(null);
 
 
 
@@ -196,87 +201,224 @@ export default function QuestionRenderer({
     );
   };
 
-  // --- 4. MATCHING ---
+  // --- 4. MATCHING (Drag & Match) ---
   const renderMatching = () => {
     const itemsA: string[] = question.options?.itemsA || [];
     const itemsB: string[] = question.options?.itemsB || [];
 
-    const handleSelectMatch = (aIdx: number, bIdxStr: string) => {
+    const handleDrop = (aIdx: number, bIdx: number) => {
       if (isSubmitted) return;
-      const bIdx = bIdxStr === '' ? -1 : parseInt(bIdxStr);
       const newSelections = [...matchingSelections];
 
-      // Đảm bảo tính duy nhất: 1 đáp án cột B chỉ được chọn cho 1 đáp án cột A
-      if (bIdx !== -1) {
-        const existingAIdx = newSelections.findIndex(sel => sel === bIdx);
-        if (existingAIdx !== -1 && existingAIdx !== aIdx) {
-          newSelections[existingAIdx] = -1; // Hủy chọn ở mục cũ
+      // Find if bIdx is already assigned to some other slot (existingAIdx)
+      const existingAIdx = newSelections.findIndex(sel => sel === bIdx);
+      const oldBIdx = newSelections[aIdx] ?? -1;
+
+      if (existingAIdx !== -1) {
+        // If the target slot already had an item, swap them!
+        if (oldBIdx !== -1) {
+          newSelections[existingAIdx] = oldBIdx;
+        } else {
+          newSelections[existingAIdx] = -1;
         }
       }
 
       newSelections[aIdx] = bIdx;
       setMatchingSelections(newSelections);
       onChangeAnswer(newSelections);
+      setSelectedSourceIdx(null);
+    };
+
+    const handleRemoveMatch = (aIdx: number) => {
+      if (isSubmitted) return;
+      const newSelections = [...matchingSelections];
+      newSelections[aIdx] = -1;
+      setMatchingSelections(newSelections);
+      onChangeAnswer(newSelections);
+      setSelectedSourceIdx(null);
+    };
+
+    const handleSelectSource = (bIdx: number) => {
+      if (isSubmitted) return;
+      if (selectedSourceIdx === bIdx) {
+        setSelectedSourceIdx(null);
+      } else {
+        setSelectedSourceIdx(bIdx);
+      }
+    };
+
+    const handleSelectTarget = (aIdx: number) => {
+      if (isSubmitted) return;
+      if (selectedSourceIdx !== null) {
+        handleDrop(aIdx, selectedSourceIdx);
+      } else {
+        const assignedBIdx = matchingSelections[aIdx] ?? -1;
+        if (assignedBIdx !== -1) {
+          setSelectedSourceIdx(assignedBIdx);
+        }
+      }
     };
 
     return (
       <div className="space-y-4" id={`q_matching_${question.id}`}>
-        <p className="text-xs text-amber-600 font-semibold flex items-center gap-1.5 bg-amber-50 px-3 py-1.5 rounded-lg w-max mb-2">
-          <AlertCircle className="w-4 h-4" /> Hãy nối các mục ở Cột A với Cột B bằng cách chọn tương ứng. (Mỗi đáp án chỉ được dùng 1 lần)
+        <p className="text-xs text-indigo-600 font-semibold flex items-center gap-1.5 bg-indigo-50 px-3 py-1.5 rounded-lg w-max mb-2">
+          <AlertCircle className="w-4 h-4 text-indigo-500 animate-pulse" /> 
+          Hướng dẫn: Kéo thẻ từ danh sách bên phải thả vào ô trống bên trái. Hoặc Chạm một thẻ rồi Chạm ô tương ứng để ghép đôi. Có thể kéo thẻ đã ghép sang ô khác hoặc kéo ngược lại danh sách để huỷ ghép.
         </p>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100">
-          {/* Cột A */}
-          <div className="space-y-3">
-            <h4 className="font-bold text-slate-700 text-sm border-b pb-2">CỘT A</h4>
-            {itemsA.map((item: string, aIdx: number) => {
-              const selectedBIdx = matchingSelections[aIdx];
-              const correctBIdx = question.correctAnswer[aIdx];
-              const isMatchCorrect = selectedBIdx === correctBIdx;
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-slate-50 p-5 rounded-3xl border border-slate-100">
+          {/* CỘT A (Các vế ghép + Ô drop) */}
+          <div className="space-y-4">
+            <h4 className="font-extrabold text-slate-700 text-xs tracking-wider uppercase border-b pb-2">CỘT GHÉP (CỘT A)</h4>
+            <div className="space-y-3">
+              {itemsA.map((item: string, aIdx: number) => {
+                const assignedBIdx = matchingSelections[aIdx] ?? -1;
+                const hasAssigned = assignedBIdx !== -1;
+                const correctBIdx = question.correctAnswer && question.correctAnswer[aIdx] !== undefined ? question.correctAnswer[aIdx] : -1;
+                const isMatchCorrect = assignedBIdx === correctBIdx;
 
-              let borderClass = 'border-slate-200 bg-white';
-              if (isSubmitted) {
-                borderClass = isMatchCorrect ? 'border-emerald-400 bg-emerald-50/30' : 'border-rose-400 bg-rose-50/30';
-              } else if (selectedBIdx !== -1) {
-                borderClass = 'border-indigo-400 bg-indigo-50/10';
-              }
+                let borderClass = 'border-dashed border-slate-300 hover:border-indigo-400 bg-white/50';
+                if (hasAssigned) {
+                  borderClass = 'border-solid border-indigo-400 bg-indigo-50/10 shadow-sm';
+                }
+                if (isSubmitted) {
+                  borderClass = isMatchCorrect 
+                    ? 'border-solid border-emerald-500 bg-emerald-50/40 shadow-sm shadow-emerald-50' 
+                    : 'border-solid border-rose-500 bg-rose-50/40 shadow-sm shadow-rose-50';
+                }
 
-              return (
-                <div key={aIdx} className={`p-3 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm transition-all hover:shadow-md ${borderClass}`}>
-                  <span className="font-semibold text-slate-800 text-sm flex-1">{item}</span>
-
-                  <select
-                    disabled={isSubmitted}
-                    value={selectedBIdx === -1 ? '' : selectedBIdx.toString()}
-                    onChange={(e) => handleSelectMatch(aIdx, e.target.value)}
-                    className="p-2 border-2 border-slate-200 rounded-lg text-xs bg-white focus:ring-2 focus:border-indigo-500 focus:ring-indigo-200 outline-none w-full sm:w-auto"
-                  >
-                    <option value="">-- Chọn đáp án --</option>
-                    {itemsB.map((itemB: string, bIdx: number) => {
-                      return (
-                        <option key={bIdx} value={bIdx.toString()}>
-                          {idxToLetter(bIdx)}. {itemB}
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
-              );
-            })}
+                return (
+                  <div key={aIdx} className="flex flex-col gap-1 bg-white p-3.5 rounded-2xl border shadow-sm">
+                    <span className="font-bold text-slate-800 text-xs block mb-1">Mục {aIdx + 1}: {item}</span>
+                    
+                    <div
+                      draggable={!isSubmitted && hasAssigned}
+                      onDragStart={(e: React.DragEvent) => {
+                        if (isSubmitted) return;
+                        e.dataTransfer.setData('text/plain', assignedBIdx.toString());
+                        e.dataTransfer.effectAllowed = 'move';
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        if (!isSubmitted) {
+                          e.currentTarget.classList.add('bg-indigo-50', 'border-indigo-500');
+                        }
+                      }}
+                      onDragLeave={(e) => {
+                        e.currentTarget.classList.remove('bg-indigo-50', 'border-indigo-500');
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.currentTarget.classList.remove('bg-indigo-50', 'border-indigo-500');
+                        const bIdxStr = e.dataTransfer.getData('text/plain');
+                        const bIdx = parseInt(bIdxStr);
+                        if (!isNaN(bIdx)) {
+                          handleDrop(aIdx, bIdx);
+                        }
+                      }}
+                      onClick={() => handleSelectTarget(aIdx)}
+                      className={`min-h-[44px] px-3 py-2 rounded-xl border-2 flex items-center justify-between gap-2 transition-all cursor-pointer ${borderClass} ${hasAssigned && !isSubmitted ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                    >
+                      {hasAssigned ? (
+                        <>
+                          <span className="text-xs font-semibold text-slate-800">{itemsB[assignedBIdx]}</span>
+                          {!isSubmitted && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveMatch(aIdx);
+                              }}
+                              className="w-5 h-5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-800 flex items-center justify-center text-xs font-bold shrink-0 transition-colors"
+                            >
+                              &times;
+                            </button>
+                          )}
+                          {isSubmitted && (
+                            isMatchCorrect 
+                              ? <Check className="w-4 h-4 text-emerald-600 shrink-0" /> 
+                              : <X className="w-4 h-4 text-rose-600 shrink-0" />
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-xs text-slate-400 font-medium select-none italic">
+                          {selectedSourceIdx !== null ? '⚡ Click vào đây để ghép nối...' : 'Kéo thả đáp án vào đây...'}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
-          {/* Cột B tham khảo */}
-          <div className="space-y-3">
-            <h4 className="font-bold text-slate-700 text-sm border-b pb-2">CỘT B (Danh sách đáp án)</h4>
-            <div className="space-y-2">
-              {itemsB.map((item: string, idx: number) => {
-                const isSelectedBySomeone = matchingSelections.includes(idx);
+          {/* CỘT B (Các lựa chọn kéo thả) */}
+          <div 
+            className="space-y-4"
+            onDragOver={(e) => {
+              if (!isSubmitted) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              if (isSubmitted) return;
+              e.preventDefault();
+              const bIdxStr = e.dataTransfer.getData('text/plain');
+              const bIdx = parseInt(bIdxStr);
+              if (!isNaN(bIdx)) {
+                const aIdx = matchingSelections.findIndex(sel => sel === bIdx);
+                if (aIdx !== -1) {
+                  handleRemoveMatch(aIdx);
+                }
+              }
+            }}
+          >
+            <h4 className="font-extrabold text-slate-700 text-xs tracking-wider uppercase border-b pb-2">ĐÁP ÁN ĐỂ CHỌN (CỘT B)</h4>
+            <div className="space-y-2 max-h-[350px] overflow-y-auto pr-1">
+              {itemsB.map((item: string, bIdx: number) => {
+                const isAssigned = matchingSelections.includes(bIdx);
+                const isSelected = selectedSourceIdx === bIdx;
+
+                if (isAssigned && !isSubmitted) {
+                  return (
+                    <div
+                      key={bIdx}
+                      draggable={!isSubmitted}
+                      onDragStart={(e: React.DragEvent) => {
+                        if (isSubmitted) return;
+                        e.dataTransfer.setData('text/plain', bIdx.toString());
+                        e.dataTransfer.effectAllowed = 'move';
+                      }}
+                      onClick={() => handleSelectSource(bIdx)}
+                      className="p-3 bg-slate-100 border border-slate-200 text-slate-400 rounded-xl text-xs font-medium italic select-none opacity-50 flex items-center gap-2 cursor-grab"
+                    >
+                      <span>(Đã ghép) {item}</span>
+                    </div>
+                  );
+                }
+
+                let cardClass = 'border-slate-200 hover:border-indigo-400 hover:shadow-md cursor-grab active:cursor-grabbing';
+                if (isSelected) {
+                  cardClass = 'border-indigo-500 bg-indigo-50 shadow-md ring-2 ring-indigo-200 animate-pulse';
+                }
+                if (isSubmitted) {
+                  cardClass = 'border-slate-100 bg-slate-50/50 text-slate-400 cursor-not-allowed';
+                }
+
                 return (
-                  <div key={idx} className={`p-3 bg-white border-2 rounded-xl text-xs font-medium flex items-center gap-3 shadow-sm transition-all ${isSelectedBySomeone && !isSubmitted ? 'border-indigo-200 bg-indigo-50/30 opacity-70' : 'border-slate-200 hover:border-indigo-300'}`}>
-                    <span className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-[11px] ${isSelectedBySomeone && !isSubmitted ? 'bg-indigo-200 text-indigo-700' : 'bg-slate-100 text-slate-600'}`}>
-                      {idxToLetter(idx)}
-                    </span>
-                    <span className="text-sm">{item}</span>
+                  <div
+                    key={bIdx}
+                    draggable={!isSubmitted}
+                    onDragStart={(e: React.DragEvent) => {
+                      if (isSubmitted) return;
+                      e.dataTransfer.setData('text/plain', bIdx.toString());
+                      e.dataTransfer.effectAllowed = 'move';
+                    }}
+                    onClick={() => handleSelectSource(bIdx)}
+                    className={`p-3 bg-white border-2 rounded-xl text-xs font-bold flex items-center gap-2.5 shadow-sm transition-all duration-150 transform hover:scale-[1.01] ${cardClass}`}
+                  >
+                    {!isSubmitted && (
+                      <GripVertical className="w-4 h-4 text-slate-300 group-hover:text-indigo-400 transition-colors cursor-grab" />
+                    )}
+                    <span className="text-slate-700 text-xs leading-normal">{item}</span>
                   </div>
                 );
               })}
@@ -286,15 +428,595 @@ export default function QuestionRenderer({
 
         {/* Hiển thị đáp án đúng khi nộp bài */}
         {isSubmitted && (
-          <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 text-sm text-emerald-800 mt-2 shadow-sm">
-            <p className="font-bold mb-2 flex items-center gap-1.5"><Check className="w-5 h-5"/> Đáp án nối đúng:</p>
-            <ul className="space-y-2">
+          <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 text-xs text-emerald-800 mt-2 shadow-sm">
+            <p className="font-bold mb-2 flex items-center gap-1.5"><Check className="w-5 h-5"/> Đáp án ghép nối chính xác:</p>
+            <ul className="space-y-1.5">
               {itemsA.map((item: string, aIdx: number) => (
-                <li key={aIdx} className="flex items-start gap-2 bg-white/60 p-2 rounded-lg border border-emerald-100">
-                  <span className="font-bold min-w-[30px]">{aIdx + 1}.</span>
-                  <span className="font-medium text-slate-700 flex-1">{item}</span>
-                  <span className="text-emerald-500 font-bold px-2">➔</span>
-                  <span className="font-semibold">{itemsB[question.correctAnswer[aIdx]]}</span>
+                <li key={aIdx} className="flex items-start gap-1 bg-white/70 p-2 rounded-lg border border-emerald-100">
+                  <span className="font-bold text-slate-500">{aIdx + 1}.</span>
+                  <span className="font-medium text-slate-700">{item}</span>
+                  <span className="text-emerald-500 font-bold px-1.5">➔</span>
+                  <span className="font-bold text-slate-800">{itemsB[question.correctAnswer[aIdx]]}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // --- 8. CATEGORIZATION (Phân Loại) ---
+  const renderCategorization = () => {
+    const categories: string[] = question.options?.categories || [];
+    const items: string[] = question.options?.items || [];
+    const currentAns = Array.isArray(userAnswer) ? userAnswer : Array(items.length).fill(-1);
+
+    const handleCategorize = (itemIdx: number, catIdx: number) => {
+      if (isSubmitted) return;
+      const next = [...currentAns];
+      next[itemIdx] = catIdx;
+      onChangeAnswer(next);
+      setSelectedSourceIdx(null);
+    };
+
+    const handleSelectSource = (idx: number) => {
+      if (isSubmitted) return;
+      setSelectedSourceIdx(selectedSourceIdx === idx ? null : idx);
+    };
+
+    return (
+      <div className="space-y-4" id={`q_cat_${question.id}`}>
+        <p className="text-xs text-indigo-600 font-semibold flex items-center gap-1.5 bg-indigo-50 px-3 py-1.5 rounded-lg w-max mb-1">
+          <AlertCircle className="w-4 h-4 text-indigo-500" />
+          Hướng dẫn: Kéo các mục ở dưới thả vào đúng nhóm phân loại. Hoặc Chạm chọn 1 mục rồi Chạm nhóm đích.
+        </p>
+
+        {/* Categories Columns */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {categories.map((catName, catIdx) => {
+            const assignedItems = items.map((text, idx) => ({ text, idx })).filter(item => currentAns[item.idx] === catIdx);
+
+            return (
+              <div
+                key={catIdx}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (!isSubmitted) e.currentTarget.classList.add('bg-indigo-50/50', 'border-indigo-400');
+                }}
+                onDragLeave={(e) => {
+                  e.currentTarget.classList.remove('bg-indigo-50/50', 'border-indigo-400');
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.currentTarget.classList.remove('bg-indigo-50/50', 'border-indigo-400');
+                  const itemIdx = parseInt(e.dataTransfer.getData('text/plain'));
+                  if (!isNaN(itemIdx)) {
+                    handleCategorize(itemIdx, catIdx);
+                  }
+                }}
+                onClick={() => {
+                  if (selectedSourceIdx !== null) {
+                    handleCategorize(selectedSourceIdx, catIdx);
+                  }
+                }}
+                className="bg-white p-4 rounded-3xl border-2 border-slate-200 transition-all shadow-sm flex flex-col min-h-[160px]"
+              >
+                <h5 className="font-black text-slate-700 text-xs uppercase tracking-wider border-b pb-2 mb-3 text-indigo-700">
+                  📂 {catName || `Nhóm ${catIdx + 1}`}
+                </h5>
+                <div className="flex-1 flex flex-wrap gap-2 items-start content-start">
+                  {assignedItems.length === 0 ? (
+                    <span className="text-xs text-slate-300 italic select-none py-4 w-full text-center">
+                      {selectedSourceIdx !== null ? '⚡ Click vào đây để xếp vào nhóm này...' : 'Kéo thả các mục vào đây...'}
+                    </span>
+                  ) : (
+                    assignedItems.map(item => {
+                      const isCorrect = question.correctAnswer && question.correctAnswer[item.idx] === catIdx;
+                      let itemBorder = 'border-slate-200 bg-slate-50';
+                      if (isSubmitted) {
+                        itemBorder = isCorrect ? 'border-emerald-400 bg-emerald-50 text-emerald-900' : 'border-rose-400 bg-rose-50 text-rose-900';
+                      }
+                      return (
+                        <div
+                          key={item.idx}
+                          className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 shadow-sm ${itemBorder}`}
+                        >
+                          <span>{item.text}</span>
+                          {!isSubmitted && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleCategorize(item.idx, -1);
+                              }}
+                              className="w-4 h-4 rounded-full bg-slate-200 hover:bg-slate-300 text-slate-500 hover:text-slate-800 text-[10px] flex items-center justify-center font-bold"
+                            >
+                              &times;
+                            </button>
+                          )}
+                          {isSubmitted && (
+                            isCorrect ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <X className="w-3.5 h-3.5 text-rose-600" />
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Unassigned items list */}
+        {!isSubmitted && (
+          <div className="bg-slate-50 border border-dashed border-slate-200 rounded-3xl p-4 mt-3">
+            <h6 className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">Các mục chưa phân loại:</h6>
+            <div className="flex flex-wrap gap-2">
+              {items.map((item, idx) => {
+                const isAssigned = currentAns[idx] !== -1;
+                if (isAssigned) return null;
+
+                const isSelected = selectedSourceIdx === idx;
+
+                return (
+                  <div
+                    key={idx}
+                    draggable={!isSubmitted}
+                    onDragStart={(e: React.DragEvent) => {
+                      e.dataTransfer.setData('text/plain', idx.toString());
+                    }}
+                    onClick={() => handleSelectSource(idx)}
+                    className={`px-3.5 py-2 rounded-xl border bg-white font-bold text-xs shadow-sm cursor-grab active:cursor-grabbing flex items-center gap-1.5 select-none transition-all duration-150 transform hover:scale-[1.02]
+                      ${isSelected ? 'border-indigo-500 bg-indigo-50 shadow-md ring-2 ring-indigo-200 animate-pulse' : 'border-slate-200 hover:border-indigo-400'}`}
+                  >
+                    <GripVertical className="w-3.5 h-3.5 text-slate-300" />
+                    <span>{item}</span>
+                  </div>
+                );
+              })}
+              {items.every((_, idx) => currentAns[idx] !== -1) && (
+                <span className="text-xs text-emerald-600 font-bold bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-100 flex items-center gap-1">
+                  🎉 Hoàn thành phân loại tất cả các mục!
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Correct Answers Key */}
+        {isSubmitted && (
+          <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 text-xs text-emerald-800 mt-2 shadow-sm">
+            <p className="font-bold mb-2 flex items-center gap-1.5"><Check className="w-5 h-5"/> Đáp án phân loại chính xác:</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-1.5">
+              {categories.map((cat, catIdx) => {
+                const correctItems = items.filter((_, idx) => question.correctAnswer && question.correctAnswer[idx] === catIdx);
+                return (
+                  <div key={catIdx} className="bg-white/60 p-2.5 rounded-xl border border-emerald-100">
+                    <span className="font-bold block border-b border-emerald-100 pb-1 text-slate-800 mb-1.5">📁 {cat}</span>
+                    <div className="flex flex-wrap gap-1">
+                      {correctItems.map((itemText, i) => (
+                        <span key={i} className="px-2 py-0.5 bg-emerald-100/50 text-emerald-800 border border-emerald-200/50 rounded-lg font-semibold text-[10px]">{itemText}</span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // --- 9. HOTSPOT (Điểm Nóng) ---
+  const renderHotspot = () => {
+    const spots: any[] = question.options?.spots || [];
+
+    const handleImageClick = (e: React.MouseEvent<HTMLDivElement>) => {
+      if (isSubmitted) return;
+      if (!hotspotContainerRef.current) return;
+      
+      const rect = hotspotContainerRef.current.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * 100;
+      const y = ((e.clientY - rect.top) / rect.height) * 100;
+      
+      onChangeAnswer({ 
+        x: Math.round(x * 100) / 100, 
+        y: Math.round(y * 100) / 100 
+      });
+    };
+
+    const hasSelection = userAnswer && typeof userAnswer === 'object' && 'x' in userAnswer && 'y' in userAnswer;
+
+    const isCorrectClick = hasSelection && spots.some((spot, idx) => {
+      const isCorr = spot.isCorrect || (Array.isArray(question.correctAnswer) ? question.correctAnswer.includes(idx) : question.correctAnswer === idx);
+      if (!isCorr) return false;
+      return (
+        userAnswer.x >= spot.x &&
+        userAnswer.x <= spot.x + spot.w &&
+        userAnswer.y >= spot.y &&
+        userAnswer.y <= spot.y + spot.h
+      );
+    });
+
+    return (
+      <div className="space-y-4" id={`q_hotspot_${question.id}`}>
+        <p className="text-xs text-indigo-600 font-semibold flex items-center gap-1.5 bg-indigo-50 px-3 py-1.5 rounded-lg w-max mb-1">
+          <AlertCircle className="w-4 h-4 text-indigo-500 animate-pulse" />
+          Hướng dẫn: Hãy chạm/nhấp chuột trực tiếp vào đúng vị trí cần tìm trên hình ảnh dưới đây để đặt ghim định vị.
+        </p>
+
+        <div 
+          ref={hotspotContainerRef}
+          onClick={handleImageClick}
+          className={`relative border-2 border-slate-200 rounded-3xl overflow-hidden bg-white max-w-xl mx-auto shadow-md ${!isSubmitted ? 'cursor-crosshair active:scale-[0.99] transition-transform' : 'cursor-default'}`}
+        >
+          {question.imageUrl ? (
+            <img 
+              src={question.imageUrl} 
+              alt="Hotspot exam" 
+              className="w-full h-auto select-none block pointer-events-none" 
+            />
+          ) : (
+            <div className="aspect-video bg-slate-100 flex items-center justify-center text-slate-400 italic font-bold">
+              Không tải được hình ảnh đề bài.
+            </div>
+          )}
+
+          {/* Render User Pin */}
+          {hasSelection && (
+            <div
+              className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none z-10 transition-all duration-300"
+              style={{ left: `${userAnswer.x}%`, top: `${userAnswer.y}%` }}
+            >
+              <div className="relative flex items-center justify-center">
+                <span className={`animate-ping absolute inline-flex h-8 w-8 rounded-full ${isSubmitted ? (isCorrectClick ? 'bg-emerald-400' : 'bg-rose-400') : 'bg-indigo-400'} opacity-75`}></span>
+                <div className={`relative rounded-full ${isSubmitted ? (isCorrectClick ? 'bg-emerald-600' : 'bg-rose-600') : 'bg-indigo-600'} p-2 shadow-lg border-2 border-white`}>
+                  <MapPin className="w-4 h-4 text-white fill-white" />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Render Correct Zones ON SUBMISSION */}
+          {isSubmitted && spots.map((spot, idx) => {
+            const isCorr = spot.isCorrect || (Array.isArray(question.correctAnswer) ? question.correctAnswer.includes(idx) : question.correctAnswer === idx);
+            if (!isCorr) return null;
+            return (
+              <div
+                key={idx}
+                style={{
+                  left: `${spot.x}%`,
+                  top: `${spot.y}%`,
+                  width: `${spot.w}%`,
+                  height: `${spot.h}%`,
+                }}
+                className="absolute border-2 border-dashed border-emerald-500 bg-emerald-500/15 rounded-xl flex items-center justify-center animate-fadeIn pointer-events-none z-0"
+              >
+                <span className="bg-emerald-600 text-white text-[8px] font-black px-1.5 py-0.5 rounded shadow-sm opacity-90">
+                  🎯 {spot.label || `Vùng đúng ${idx + 1}`}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Selected Coordinates Status */}
+        <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Trạng thái ghim:</span>
+          {hasSelection ? (
+            <span className={`px-3 py-1 font-bold text-xs rounded-lg flex items-center gap-1.5 animate-fadeIn ${isSubmitted ? (isCorrectClick ? 'bg-emerald-50 border border-emerald-200 text-emerald-700' : 'bg-rose-50 border border-rose-200 text-rose-700') : 'bg-indigo-50 border border-indigo-200 text-indigo-700'}`}>
+              📍 Đã ghim tại (X: {userAnswer.x}%, Y: {userAnswer.y}%)
+              {isSubmitted && (isCorrectClick ? '✓ Đúng vùng đáp án' : '✘ Ngoài vùng đáp án')}
+            </span>
+          ) : (
+            <span className="text-xs font-semibold text-slate-400 italic">Chưa chạm chọn vị trí nào.</span>
+          )}
+        </div>
+
+        {/* Hotspot Answer Key */}
+        {isSubmitted && (
+          <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 text-xs text-emerald-800 mt-2 shadow-sm max-w-xl mx-auto">
+            <p className="font-bold flex items-center gap-1.5"><Check className="w-5 h-5"/> Khu vực đáp án chính xác gồm:</p>
+            <div className="mt-1.5 space-y-1 font-semibold text-slate-700">
+              {spots.map((spot, idx) => {
+                const isCorr = spot.isCorrect || (Array.isArray(question.correctAnswer) ? question.correctAnswer.includes(idx) : question.correctAnswer === idx);
+                if (isCorr) {
+                  return <p key={idx}>• {spot.label || `Vùng số ${idx + 1}`} (Khoảng X: {spot.x}% đến {spot.x + spot.w}%, Y: {spot.y}% đến {spot.y + spot.h}%)</p>;
+                }
+                return null;
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // --- 10. MATCH IMAGE TO TEXT (Ghép Ảnh Với Chữ) ---
+  const renderMatchImage = () => {
+    const texts: string[] = question.options?.texts || [];
+    const images: string[] = question.options?.images || [];
+    const currentAns = Array.isArray(userAnswer) ? userAnswer : Array(texts.length).fill(-1);
+
+    const handleMatch = (textIdx: number, imgIdx: number) => {
+      if (isSubmitted) return;
+      const next = [...currentAns];
+
+      const existingTextIdx = next.findIndex(sel => sel === imgIdx);
+      if (existingTextIdx !== -1) {
+        next[existingTextIdx] = -1;
+      }
+
+      next[textIdx] = imgIdx;
+      onChangeAnswer(next);
+      setSelectedSourceIdx(null);
+    };
+
+    const handleRemove = (textIdx: number) => {
+      if (isSubmitted) return;
+      const next = [...currentAns];
+      next[textIdx] = -1;
+      onChangeAnswer(next);
+    };
+
+    const handleSelectSource = (imgIdx: number) => {
+      if (isSubmitted) return;
+      setSelectedSourceIdx(selectedSourceIdx === imgIdx ? null : imgIdx);
+    };
+
+    const handleSelectTarget = (textIdx: number) => {
+      if (isSubmitted) return;
+      if (selectedSourceIdx !== null) {
+        handleMatch(textIdx, selectedSourceIdx);
+      }
+    };
+
+    return (
+      <div className="space-y-4" id={`q_match_img_${question.id}`}>
+        <p className="text-xs text-indigo-600 font-semibold flex items-center gap-1.5 bg-indigo-50 px-3 py-1.5 rounded-lg w-max mb-1">
+          <AlertCircle className="w-4 h-4 text-indigo-500" />
+          Hướng dẫn: Kéo các hình ảnh ở dưới và thả vào đúng ô chữ tương ứng ở trên. Hoặc Chạm chọn ảnh rồi Chạm ô đích.
+        </p>
+
+        {/* Text Target Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          {texts.map((textLabel, textIdx) => {
+            const matchedImgIdx = currentAns[textIdx] ?? -1;
+            const hasMatched = matchedImgIdx !== -1;
+            const isMatchCorrect = matchedImgIdx === (question.correctAnswer && question.correctAnswer[textIdx]);
+
+            let borderStyle = 'border-dashed border-slate-300 hover:border-indigo-400 bg-white';
+            if (hasMatched) {
+              borderStyle = 'border-solid border-indigo-400 bg-indigo-50/5 shadow-sm';
+            }
+            if (isSubmitted) {
+              borderStyle = isMatchCorrect 
+                ? 'border-solid border-emerald-500 bg-emerald-50/20 shadow-emerald-50' 
+                : 'border-solid border-rose-500 bg-rose-50/20 shadow-rose-50';
+            }
+
+            return (
+              <div
+                key={textIdx}
+                onClick={() => handleSelectTarget(textIdx)}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (!isSubmitted) e.currentTarget.classList.add('bg-indigo-50/50', 'border-indigo-400');
+                }}
+                onDragLeave={(e) => {
+                  e.currentTarget.classList.remove('bg-indigo-50/50', 'border-indigo-400');
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.currentTarget.classList.remove('bg-indigo-50/50', 'border-indigo-400');
+                  const imgIdx = parseInt(e.dataTransfer.getData('text/plain'));
+                  if (!isNaN(imgIdx)) {
+                    handleMatch(textIdx, imgIdx);
+                  }
+                }}
+                className={`p-3 rounded-2xl border-2 flex flex-col items-center gap-3 transition-all cursor-pointer shadow-sm ${borderStyle}`}
+              >
+                <span className="font-extrabold text-xs text-slate-800 text-center uppercase tracking-wide leading-tight min-h-[30px] flex items-center justify-center">
+                  {textLabel}
+                </span>
+
+                <div className="w-full aspect-square rounded-xl bg-slate-50 border border-slate-150 overflow-hidden flex items-center justify-center relative shadow-inner">
+                  {hasMatched ? (
+                    <>
+                      <img src={images[matchedImgIdx]} alt="Matched" className="w-full h-full object-cover" />
+                      {!isSubmitted && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemove(textIdx);
+                          }}
+                          className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/60 hover:bg-black text-white flex items-center justify-center text-xs font-bold transition-colors"
+                        >
+                          &times;
+                        </button>
+                      )}
+                      {isSubmitted && (
+                        <div className={`absolute bottom-1 right-1 rounded-full p-0.5 text-white shadow-md
+                          ${isMatchCorrect ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                        >
+                          {isMatchCorrect ? <Check className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-[10px] text-slate-400 font-bold select-none text-center px-2 italic">
+                      {selectedSourceIdx !== null ? '⚡ Ghép vào đây...' : 'Thả hình vào...'}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Draggable images library */}
+        {!isSubmitted && (
+          <div className="bg-slate-50 border border-dashed border-slate-200 rounded-3xl p-4 mt-3">
+            <h6 className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">Thư viện hình ảnh để kéo thả:</h6>
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+              {images.map((imgUrl, imgIdx) => {
+                const isMatched = currentAns.includes(imgIdx);
+                if (isMatched) {
+                  return (
+                    <div key={imgIdx} className="aspect-square bg-slate-100 border border-slate-200 rounded-xl flex items-center justify-center opacity-40 select-none">
+                      <span className="text-[9px] text-slate-400 font-bold">Đã ghép</span>
+                    </div>
+                  );
+                }
+
+                const isSelected = selectedSourceIdx === imgIdx;
+
+                return (
+                  <div
+                    key={imgIdx}
+                    draggable={!isSubmitted}
+                    onDragStart={(e: React.DragEvent) => {
+                      e.dataTransfer.setData('text/plain', imgIdx.toString());
+                    }}
+                    onClick={() => handleSelectSource(imgIdx)}
+                    className={`aspect-square rounded-xl bg-white border-2 overflow-hidden cursor-grab active:cursor-grabbing relative shadow-sm group transition-all duration-150 transform hover:scale-[1.03] hover:rotate-1
+                      ${isSelected ? 'border-indigo-500 ring-2 ring-indigo-200 shadow-md animate-pulse' : 'border-slate-200 hover:border-indigo-400'}`}
+                  >
+                    <img src={imgUrl} alt={`Option ${imgIdx + 1}`} className="w-full h-full object-cover pointer-events-none" />
+                    <div className="absolute top-1 left-1 bg-black/60 rounded-full w-4.5 h-4.5 flex items-center justify-center text-[8px] text-white font-extrabold shadow">
+                      {imgIdx + 1}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Correct Answers summary */}
+        {isSubmitted && (
+          <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 text-xs text-emerald-800 mt-2 shadow-sm">
+            <p className="font-bold mb-2 flex items-center gap-1.5"><Check className="w-5 h-5"/> Đáp án ghép hình chuẩn xác:</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-1.5">
+              {texts.map((textLabel, textIdx) => (
+                <div key={textIdx} className="bg-white/60 p-2 rounded-xl border border-emerald-100 flex flex-col items-center gap-1.5">
+                  <span className="font-bold text-[11px] text-slate-700 text-center block">{textLabel}</span>
+                  <div className="w-16 h-16 rounded-lg bg-white border border-emerald-200 overflow-hidden shrink-0 shadow-sm">
+                    <img src={images[question.correctAnswer[textIdx]]} alt="Correct match" className="w-full h-full object-cover" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // --- 11. MATRIX SELECTION (Ma Trận Có/Không hoặc Tùy Chọn) ---
+  const renderMatrixSelection = () => {
+    const rows: string[] = question.options?.rows || [];
+    const cols: string[] = question.options?.columns || [];
+    const currentAns = Array.isArray(userAnswer) ? userAnswer : Array(rows.length).fill(-1);
+
+    const handleSelectCell = (rowIdx: number, colIdx: number) => {
+      if (isSubmitted) return;
+      const next = [...currentAns];
+      next[rowIdx] = colIdx;
+      onChangeAnswer(next);
+    };
+
+    return (
+      <div className="space-y-4" id={`q_matrix_${question.id}`}>
+        <p className="text-xs text-indigo-600 font-semibold flex items-center gap-1.5 bg-indigo-50 px-3 py-1.5 rounded-lg w-max mb-1">
+          <AlertCircle className="w-4 h-4 text-indigo-500" />
+          Hướng dẫn: Chọn nút tròn đáp án đúng tương ứng với mỗi hàng.
+        </p>
+
+        <div className="bg-white border rounded-3xl overflow-x-auto shadow-sm p-4 border-slate-200">
+          <table className="w-full border-collapse text-left text-xs">
+            <thead>
+              <tr className="border-b border-slate-100">
+                <th className="p-3 text-[10px] font-black text-slate-400 uppercase tracking-wider">Hàng / Lựa chọn</th>
+                {cols.map((col, idx) => (
+                  <th key={idx} className="p-3 text-center text-[10px] font-black text-slate-600 uppercase tracking-wider">
+                    {col}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((rowText, rIdx) => {
+                const selectedColIdx = currentAns[rIdx];
+                const correctColIdx = question.correctAnswer && question.correctAnswer[rIdx];
+
+                return (
+                  <tr key={rIdx} className="hover:bg-slate-50/50 transition-colors border-b border-slate-50 last:border-0">
+                    <td className="p-3 font-bold text-slate-700 leading-normal max-w-xs">
+                      {rowText}
+                    </td>
+                    {cols.map((_, cIdx) => {
+                      const isSel = selectedColIdx === cIdx;
+                      const isCorr = correctColIdx === cIdx;
+
+                      let cellClass = '';
+                      if (isSubmitted) {
+                        if (isCorr) {
+                          cellClass = 'bg-emerald-50/50 text-emerald-600';
+                        } else if (isSel) {
+                          cellClass = 'bg-rose-50/50 text-rose-600';
+                        }
+                      }
+
+                      return (
+                        <td key={cIdx} className={`p-3 text-center transition-colors ${cellClass}`}>
+                          <div className="flex justify-center items-center relative">
+                            <input
+                              type="radio"
+                              disabled={isSubmitted}
+                              name={`mat_row_ans_${question.id}_${rIdx}`}
+                              checked={isSel}
+                              onChange={() => handleSelectCell(rIdx, cIdx)}
+                              className="w-4.5 h-4.5 text-indigo-600 border-slate-300 focus:ring-indigo-500 cursor-pointer disabled:cursor-not-allowed"
+                            />
+                            {isSubmitted && isCorr && (
+                              <Check className="w-3.5 h-3.5 text-emerald-600 absolute ml-6" />
+                            )}
+                            {isSubmitted && isSel && !isCorr && (
+                              <X className="w-3.5 h-3.5 text-rose-600 absolute ml-6" />
+                            )}
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Unanswered rows check warning */}
+        {!isSubmitted && rows.some((_, idx) => currentAns[idx] === -1) && (
+          <span className="text-[10px] text-amber-600 font-bold bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 inline-block">
+            ⚠️ Hãy tích chọn đầy đủ đáp án cho tất cả các hàng ở phía trên!
+          </span>
+        )}
+
+        {/* Matrix correct summary key */}
+        {isSubmitted && (
+          <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 text-xs text-emerald-800 mt-2 shadow-sm">
+            <p className="font-bold mb-2 flex items-center gap-1.5"><Check className="w-5 h-5"/> Bảng đáp án ma trận chuẩn:</p>
+            <ul className="space-y-1 mt-1.5 font-semibold text-slate-700">
+              {rows.map((row, rIdx) => (
+                <li key={rIdx} className="flex items-center gap-1">
+                  • <span>{row}:</span>
+                  <span className="bg-emerald-100 text-emerald-800 border border-emerald-200/50 rounded-md px-1.5 py-0.5 text-[10px] ml-1">
+                    {cols[question.correctAnswer[rIdx]]}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -615,6 +1337,14 @@ export default function QuestionRenderer({
         return renderVideoBased();
       case QuestionType.SEQUENCE:
         return renderSequence();
+      case QuestionType.CATEGORIZATION:
+        return renderCategorization();
+      case QuestionType.HOTSPOT:
+        return renderHotspot();
+      case QuestionType.MATCH_IMAGE:
+        return renderMatchImage();
+      case QuestionType.MATRIX_SELECTION:
+        return renderMatrixSelection();
       default:
         return <p className="text-slate-500">Dạng câu hỏi không hỗ trợ.</p>;
     }
