@@ -1,4 +1,4 @@
-import { Student, Test, Question, TestResult, QuestionType, IC3Category, Badge, BADGES, initDB, getStudents, getTests, getAdmins, getTestResults, getQuestions } from './db';
+import { Student, Test, Question, TestResult, QuestionType, IC3Category, Badge, BADGES, initDB, getStudents, getTests, getAdmins, getTestResults, getQuestions, saveQuestions } from './db';
 
 // Key for storing the Apps Script API URL in localStorage
 const APPS_SCRIPT_URL_KEY = 'ic3_google_sheet_api_url';
@@ -306,12 +306,50 @@ export async function syncDatabaseFromGoogleSheets(): Promise<{
       status: String(a.status || 'active')
     }));
 
+    // Fetch and sync questions for all active tests
+    console.log('[Sync] Fetching latest questions...');
+    let allSyncedQuestions: Question[] = [];
+    try {
+      const questionPromises = tests.map(async (test) => {
+        const sheetName = (test as any).sheetName || test.code;
+        try {
+          const qList = await fetchQuestionsFromGoogleSheet(sheetName, test.code);
+          return qList;
+        } catch (e) {
+          console.warn(`[Sync] Failed to fetch questions for ${test.code}:`, e);
+          return getQuestions().filter(q => q.testId === test.code);
+        }
+      });
+      const questionGroups = await Promise.all(questionPromises);
+      allSyncedQuestions = questionGroups.flat().filter(Boolean) as Question[];
+      console.log(`[Sync] Questions from API: ${allSyncedQuestions.length}`);
+    } catch (err) {
+      console.warn('[Sync] Failed to sync questions list:', err);
+      allSyncedQuestions = getQuestions();
+    }
+
     // Cache to localstorage as a robust fallback/offline layer
     if (typeof window !== 'undefined') {
+      const oldQuestionsStr = localStorage.getItem('ic3_questions') || '[]';
+      let oldQuestions: Question[] = [];
+      try {
+        oldQuestions = JSON.parse(oldQuestionsStr);
+      } catch (e) {
+        oldQuestions = [];
+      }
+
+      const isDifferent = JSON.stringify(oldQuestions) !== JSON.stringify(allSyncedQuestions);
+      if (isDifferent) {
+        console.log('[Sync] Cache invalidated.');
+      }
+
       localStorage.setItem('ic3_students', JSON.stringify(students));
       localStorage.setItem('ic3_tests', JSON.stringify(tests));
       localStorage.setItem('ic3_admins', JSON.stringify(admins));
       localStorage.setItem('ic3_results', JSON.stringify(results));
+      localStorage.setItem('ic3_questions', JSON.stringify(allSyncedQuestions));
+      console.log('[Sync] Cache updated.');
+      console.log('[Sync] Rendering latest data.');
     }
 
     return { students, tests, admins, results };
@@ -335,7 +373,7 @@ export async function fetchQuestionsFromGoogleSheet(sheetName: string, testCode:
 
     const validQuestions = rawQuestions.filter((q: any) => q !== null && typeof q === 'object');
 
-    return (validQuestions.map((q: any, idx: number) => {
+    const parsedQuestions = (validQuestions.map((q: any, idx: number) => {
       try {
         const qType = mapSheetQuestionType(q.type);
       
@@ -660,7 +698,21 @@ export async function fetchQuestionsFromGoogleSheet(sheetName: string, testCode:
         return null;
       }
     }).filter(Boolean) as Question[]);
-  } catch (error) {
+
+    // Automatically update individual test questions in local cache to match Sheet exactly
+    if (typeof window !== 'undefined') {
+      try {
+        const allQuestions = getQuestions();
+        const otherQuestions = allQuestions.filter(q => q.testId !== testCode);
+        const updatedQuestions = [...otherQuestions, ...parsedQuestions];
+        saveQuestions(updatedQuestions);
+        console.log(`[Sync] Cache updated for test ${testCode}. Fetched: ${parsedQuestions.length}, Total cached: ${updatedQuestions.length}`);
+      } catch (e) {
+        console.warn(`[Sync] Failed to cache questions for test ${testCode}:`, e);
+      }
+    }
+
+    return parsedQuestions;  } catch (error) {
     console.warn(`Error loading questions for sheet "${sheetName}":`, error);
     return [];
   }
