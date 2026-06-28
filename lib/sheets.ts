@@ -1012,7 +1012,13 @@ export async function saveQuestionsBatchToGoogleSheet(testCode: string, question
  */
 export async function deleteRowInGoogleSheet(sheetName: string, keyColumn: string, keyValue: string) {
   try {
-    const response = await apiFetch('deleteRow', {}, {
+    let action = 'deleteRow';
+    if (sheetName === 'students') action = 'deleteStudent';
+    else if (sheetName === 'exam_catalog') action = 'deleteTest';
+    else if (sheetName === 'results') action = 'deleteResult';
+    else if (keyColumn === 'id') action = 'deleteQuestion';
+
+    const response = await apiFetch(action, {}, {
       sheet_name: sheetName,
       key_column: keyColumn,
       key_value: keyValue

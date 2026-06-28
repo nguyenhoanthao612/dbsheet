@@ -28,13 +28,15 @@ function doGet(e) {
   var action = e.parameter.action;
   var sheetName = e.parameter.sheetName;
   
-  if (action === 'getInitialData') {
-    return handleGetInitialData();
-  } else if (action === 'getData') {
-    return handleGetData(sheetName);
+  switch(action) {
+    case 'getInitialData':
+      return handleGetInitialData();
+    case 'getData':
+    case 'getQuestions': // Alias
+      return handleGetData(sheetName);
+    default:
+      return jsonResponse({ error: 'INVALID_ACTION', message: 'Hành động GET không hợp lệ: ' + action });
   }
-  
-  return jsonResponse({ error: 'INVALID_ACTION', message: 'Hành động không hợp lệ' });
 }
 
 function doPost(e) {
@@ -43,9 +45,12 @@ function doPost(e) {
   
   try {
     if (e.postData && e.postData.contents) {
+      Logger.log(e.postData.contents);
       postData = JSON.parse(e.postData.contents);
+      Logger.log(postData.action);
     }
   } catch (err) {
+    Logger.log("Error parsing JSON: " + err);
     postData = e.parameter;
   }
   
@@ -53,25 +58,43 @@ function doPost(e) {
     action = postData.action;
   }
   
-  if (action === 'initializeDatabase') {
-    return handleInitializeDatabase();
-  } else if (action === 'addResult') {
-    return handleAddResult(postData);
-  } else if (action === 'addLoginLog') {
-    return handleAddLoginLog(postData);
-  } else if (action === 'updateStudent') {
-    return handleUpdateStudent(postData);
-  } else if (action === 'updateExam') {
-    return handleUpdateExam(postData);
-  } else if (action === 'updateQuestion') {
-    return handleUpdateQuestion(postData);
-  } else if (action === 'saveQuestionsBatch') {
-    return handleSaveQuestionsBatch(postData);
-  } else if (action === 'deleteRow') {
-    return handleDeleteRow(postData);
+  switch(action) {
+    case 'initializeDatabase':
+      return handleInitializeDatabase();
+      
+    case 'addResult':
+      return handleAddResult(postData);
+      
+    case 'addLoginLog':
+      return handleAddLoginLog(postData);
+      
+    case 'addStudent':
+    case 'updateStudent':
+      return handleUpdateStudent(postData);
+      
+    case 'createTest':
+    case 'addExam':
+    case 'updateTest':
+    case 'updateExam':
+      return handleUpdateExam(postData);
+      
+    case 'addQuestion':
+    case 'updateQuestion':
+      return handleUpdateQuestion(postData);
+      
+    case 'saveQuestionsBatch':
+      return handleSaveQuestionsBatch(postData);
+      
+    case 'deleteQuestion':
+    case 'deleteStudent':
+    case 'deleteTest':
+    case 'deleteExam':
+    case 'deleteRow':
+      return handleDeleteRow(postData, action);
+      
+    default:
+      return jsonResponse({ error: 'INVALID_ACTION', message: 'Hành động POST không hợp lệ: ' + action });
   }
-  
-  return jsonResponse({ error: 'INVALID_ACTION', message: 'Hành động POST không hợp lệ' });
 }
 
 // 1. LẤY DỮ LIỆU BAN ĐẦU (Học sinh, Quản trị viên, Đề thi)
@@ -533,11 +556,26 @@ function handleSaveQuestionsBatch(data) {
 }
 
 // 9. XÓA DÒNG DỮ LIỆU TỔNG QUÁT (Dành cho việc Xóa học sinh, Xóa đề thi, Xóa câu hỏi)
-function handleDeleteRow(data) {
+function handleDeleteRow(data, specificAction) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheetName = data.sheet_name;
   var keyColumn = data.key_column;
   var keyValue = data.key_value;
+  
+  // Hỗ trợ xử lý trực tiếp nếu gọi action alias
+  if (specificAction === 'deleteStudent') {
+    sheetName = 'students';
+    keyColumn = 'student_id';
+    keyValue = data.student_id || data.id;
+  } else if (specificAction === 'deleteTest' || specificAction === 'deleteExam') {
+    sheetName = 'exam_catalog';
+    keyColumn = 'exam_id';
+    keyValue = data.exam_id || data.test_id || data.id;
+  } else if (specificAction === 'deleteQuestion') {
+    sheetName = data.sheet_name || data.test_id;
+    keyColumn = 'id';
+    keyValue = data.id || data.question_id;
+  }
   
   if (!sheetName || !keyColumn || !keyValue) {
     return jsonResponse({ error: 'MISSING_PARAMS', message: 'Thiếu tham số xóa dữ liệu' });
